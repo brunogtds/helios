@@ -1,0 +1,15 @@
+fastapi[all]
+uvicorn
+pandas
+numpy
+scipy
+statsmodels
+scikit-learn
+plotly
+torch
+langchain
+langchain-core
+langchain-openai
+langchain-groq
+google-generativeai
+pydantic
