@@ -19,7 +19,7 @@ The current version runs as a local application with:
 Clone the repository:
 
 ```bash
-git clone https://github.com/YOUR-USER/helios.git
+git clone https://github.com/brunogtds/helios.git
 cd helios
 ```
 
