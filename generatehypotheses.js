@@ -24,8 +24,6 @@ function getReadableTestName(testType) {
     const map = {
         one_sample_t_test: "One-sample t-test",
         welch_t_test: "Welch's t-test",
-        mann_whitney_u_test: "Mann-Whitney U test",
-        kruskal_wallis_test: "Kruskal-Wallis test",
         anova_test: "ANOVA",
         levene_test: "Levene's test"
     };
@@ -414,6 +412,27 @@ function renderAIAgentsTab() {
                         <div id="ai-provider-status" class="text-xs text-gray-600"></div>
                     </div>
 
+                    <fieldset class="md:col-span-3">
+                        <legend class="font-semibold text-gray-700 mb-2">Statistical test</legend>
+                        <div class="grid grid-cols-2 lg:grid-cols-5 gap-2" role="radiogroup" aria-label="Statistical test">
+                            ${[
+                                ['auto', 'Automatic'],
+                                ['one_sample_t_test', 'One-sample t-test'],
+                                ['welch_t_test', "Welch's t-test"],
+                                ['anova_test', 'ANOVA'],
+                                ['levene_test', "Levene's test"]
+                            ].map(([value, label], index) => `
+                                <label class="cursor-pointer">
+                                    <input type="radio" name="ai-test-type" value="${value}" ${index === 0 ? 'checked' : ''} class="peer sr-only">
+                                    <span class="block h-full rounded-md border border-gray-300 bg-white px-3 py-2 text-center text-xs font-medium text-gray-700 transition peer-checked:border-purple-600 peer-checked:bg-purple-100 peer-checked:text-purple-900 peer-focus:ring-2 peer-focus:ring-purple-500">
+                                        ${label}
+                                    </span>
+                                </label>
+                            `).join('')}
+                        </div>
+                        <p class="mt-2 text-xs text-gray-500">Automatic lets the advisor choose from your goal. A specific selection restricts the entire run to that test.</p>
+                    </fieldset>
+
                     <div>
                         <label for="ai-agent-model" class="font-semibold text-gray-700">Model Name:</label>
                         <input type="text" id="ai-agent-model" value="gpt-5.4-mini" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-purple-500 focus:ring-purple-500 sm:text-sm">
@@ -428,7 +447,7 @@ function renderAIAgentsTab() {
                     </div>
                     <div>
                         <label for="ai-agent-min-hyp" class="font-semibold text-gray-700">Min Hypotheses / Run:</label>
-                        <input type="number" id="ai-agent-min-hyp" value="5" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-purple-500 focus:ring-purple-500 sm:text-sm">
+                        <input type="number" id="ai-agent-min-hyp" value="10" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-purple-500 focus:ring-purple-500 sm:text-sm">
                     </div>
                 </div>
 
@@ -601,6 +620,9 @@ function attachEventListeners(isHypothesisReady) {
                     selectedMethods[method].temperature = parseFloat(document.getElementById('ai-agent-temperature').value) || 0.2;
                     selectedMethods[method].total_iterations = parseInt(document.getElementById('ai-agent-iterations').value, 10) || 2;
                     selectedMethods[method].min_hypotheses_per_run = parseInt(document.getElementById('ai-agent-min-hyp').value, 10) || 3;
+
+                    selectedMethods[method].selected_test_type =
+                        document.querySelector('input[name="ai-test-type"]:checked')?.value || 'auto';
 
                    
                 }
@@ -785,11 +807,11 @@ function setupAndRenderHypotheses(hypotheses, sunburstJson, newTargetInfo, table
     window.hypothesesApp.buildHypothesisCategoryTitle = buildHypothesisCategoryTitle;
 
     drawHypothesisTables();
-    //renderSunburstCharts(sortedHypotheses);
-    //renderHypothesisTree(sortedHypotheses);
-    //renderTSNE(sortedHypotheses);
-    //renderHeatmap(sortedHypotheses);
-    //renderMetrics(sortedHypotheses);
+    renderSunburstCharts(sortedHypotheses);
+    renderHypothesisTree(sortedHypotheses);
+    renderTSNE(sortedHypotheses);
+    renderHeatmap(sortedHypotheses);
+    renderMetrics(sortedHypotheses);
 
     const analyzeBtn = document.getElementById('analyze-with-llm-btn');
     if (analyzeBtn) {

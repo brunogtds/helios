@@ -432,7 +432,7 @@ Do not repeat old hypotheses unless they are necessary refinements.
                 model_name: document.getElementById('ai-agent-model')?.value.trim() || getDefaultModelForProvider(provider),
                 temperature: parseFloat(document.getElementById('ai-agent-temperature')?.value) || 0.5,
                 total_iterations: parseInt(document.getElementById('ai-agent-iterations')?.value, 10) || 3,
-                min_hypotheses_per_run: parseInt(document.getElementById('ai-agent-min-hyp')?.value, 10) || 5
+                min_hypotheses_per_run: parseInt(document.getElementById('ai-agent-min-hyp')?.value, 10) || 10
             }
         }, true);
 

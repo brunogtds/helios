@@ -1,8 +1,8 @@
 /**
- * @file sheva_ui.js - User interface rendering and interaction logic for SHEVA 2.0
+ * @file helios_ui.js - User interface rendering and interaction logic for HELIOS 2.0
  * Handles DOM manipulation, event listeners, visualizations, and hypothesis generation.
  *
- * @author SHEVA Team
+ * @author HELIOS Team
  * @version 2.0.0
  */
 
@@ -21,7 +21,7 @@ document.addEventListener('DOMContentLoaded', () => {
     csvFileInput.addEventListener('change', (event) => {
         if (event.target.files && event.target.files[0]) {
             const file = event.target.files[0];
-            window.ShevaCore.loadCSVFile(file, (filename) => {
+            window.HeliosCore.loadCSVFile(file, (filename) => {
                 // Novo dataset: não preservar description anterior
                 renderTable(filename, false);
             });
@@ -93,13 +93,13 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function buildHypothesesExportPayload() {
-        const targetIndex = window.ShevaCore.state.targetColumnIndex;
+        const targetIndex = window.HeliosCore.state.targetColumnIndex;
         const targetName = targetIndex !== null
-            ? window.ShevaCore.state.tableData.headers[targetIndex]
+            ? window.HeliosCore.state.tableData.headers[targetIndex]
             : null;
 
         const targetColumnData = targetIndex !== null
-            ? window.ShevaCore.state.tableData.rows
+            ? window.HeliosCore.state.tableData.rows
                 .map(row => parseFloat(row[targetIndex]))
                 .filter(n => !isNaN(n))
             : [];
@@ -111,7 +111,7 @@ document.addEventListener('DOMContentLoaded', () => {
             : null;
 
         return {
-            system: 'SHEVA-LLM',
+            system: 'HELIOS-LLM',
             export_version: '1.0',
             exported_at: new Date().toISOString(),
             file_name: csvFileInput.files[0]?.name || 'data',
@@ -120,8 +120,8 @@ document.addEventListener('DOMContentLoaded', () => {
             target_variance: variance,
             total_generated_hypotheses: currentGeneratedHypotheses.length,
             total_validated_hypotheses: currentValidatedHypotheses.length,
-            comparison_columns: window.ShevaCore.state.comparisonColumnIndices.map(
-                idx => window.ShevaCore.state.tableData.headers[idx]
+            comparison_columns: window.HeliosCore.state.comparisonColumnIndices.map(
+                idx => window.HeliosCore.state.tableData.headers[idx]
             ),
             generated_hypotheses: currentGeneratedHypotheses,
             validated_hypotheses: currentValidatedHypotheses
@@ -155,7 +155,7 @@ document.addEventListener('DOMContentLoaded', () => {
         button.addEventListener('click', () => {
             const payload = buildHypothesesExportPayload();
             const filenameBase = (csvFileInput.files[0]?.name || 'dataset').replace(/\.[^/.]+$/, '');
-            downloadJSON(payload, `${filenameBase}_sheva_hypotheses.json`);
+            downloadJSON(payload, `${filenameBase}_helios_hypotheses.json`);
         });
 
         wrapper.appendChild(button);
@@ -172,7 +172,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const id = section.id;
             const content = section.querySelector('.collapsible-content, .collapsible-content-static');
             if (id && content) {
-                window.ShevaCore.state.collapsibleStates[id] = content.classList.contains('expanded');
+                window.HeliosCore.state.collapsibleStates[id] = content.classList.contains('expanded');
             }
         });
     }
@@ -193,12 +193,12 @@ document.addEventListener('DOMContentLoaded', () => {
             content.style.maxHeight = '0px';
             content.classList.remove('expanded');
             icon.classList.replace('fa-chevron-up', 'fa-chevron-down');
-            window.ShevaCore.state.collapsibleStates[sectionId] = false;
+            window.HeliosCore.state.collapsibleStates[sectionId] = false;
         } else {
             content.style.maxHeight = content.scrollHeight + "px";
             content.classList.add('expanded');
             icon.classList.replace('fa-chevron-down', 'fa-chevron-up');
-            window.ShevaCore.state.collapsibleStates[sectionId] = true;
+            window.HeliosCore.state.collapsibleStates[sectionId] = true;
 
             content.addEventListener('transitionend', function onTransitionEnd() {
                 content.style.overflow = 'visible';
@@ -272,6 +272,39 @@ document.addEventListener('DOMContentLoaded', () => {
 
                     <div id="ai-live-preview-wrapper" class="space-y-4">
 
+                        <div id="ai-data-context-panel" class="hidden rounded-xl border border-sky-200 bg-sky-50 p-4">
+
+                            <div class="flex items-center justify-between mb-2">
+
+                                <h4 class="font-semibold text-sky-900 flex items-center">
+                                    <i class="fas fa-database mr-2"></i>
+                                    Data context sent to the agents
+                                </h4>
+
+                                <span
+                                    id="ai-selected-test-badge"
+                                    class="text-xs font-medium bg-sky-100 text-sky-800 px-2 py-1 rounded-full"
+                                >
+                                    Auto
+                                </span>
+
+                            </div>
+
+                            <details open>
+
+                                <summary class="cursor-pointer text-sm font-medium text-sky-900">
+                                    Show exact data_context
+                                </summary>
+
+                                <pre
+                                    id="ai-data-context"
+                                    class="mt-3 text-xs text-gray-700 whitespace-pre-wrap break-words max-h-96 overflow-y-auto bg-white p-3 rounded-lg border border-sky-200"
+                                >Preparing dataset context...</pre>
+
+                            </details>
+
+                        </div>
+
                         <div class="rounded-xl border border-emerald-200 bg-emerald-50 p-4">
                                 <div class="flex items-center justify-between mb-2">
                                     <h4 class="font-semibold text-emerald-900 flex items-center">
@@ -331,6 +364,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function showAIProgressBox() {
         document.getElementById('ai-progress-box')?.classList.remove('hidden');
+        document.getElementById('ai-data-context-panel')?.classList.add('hidden');
+        const dataContextEl = document.getElementById('ai-data-context');
+        if (dataContextEl) dataContextEl.textContent = '';
         animatedProgressValue = 0;
         updateAIProgressBar(0, 'Generating hypotheses... This may take a few seconds.', true);
         //updateLiveHypothesisPreview({});
@@ -596,6 +632,28 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             const resultData = await resultResponse.json();
+            if (resultData?.run_params?.data_context) {
+                const dataContextEl = document.getElementById('ai-data-context');
+                const dataContextPanel = document.getElementById('ai-data-context-panel');
+
+                if (dataContextEl) {
+                    try {
+                        const parsedContext =
+                            typeof resultData.run_params.data_context === 'string'
+                                ? JSON.parse(resultData.run_params.data_context)
+                                : resultData.run_params.data_context;
+
+                        dataContextEl.textContent =
+                            JSON.stringify(parsedContext, null, 2);
+
+                    } catch (error) {
+                        dataContextEl.textContent =
+                            String(resultData.run_params.data_context);
+                    }
+
+                    dataContextPanel?.classList.remove('hidden');
+                }
+            }
             hideAIProgressBox();
 
             return resultData;
@@ -620,20 +678,20 @@ document.addEventListener('DOMContentLoaded', () => {
         if (preserveDescription) {
             const existingDescription = document.getElementById('dataset-description');
             if (existingDescription) {
-                window.ShevaCore.state.datasetDescriptionText = existingDescription.value;
+                window.HeliosCore.state.datasetDescriptionText = existingDescription.value;
             }
         } else {
-            window.ShevaCore.state.datasetDescriptionText = '';
+            window.HeliosCore.state.datasetDescriptionText = '';
         }
 
         const getSectionState = (id, defaultState = false) => {
-            if (Object.keys(window.ShevaCore.state.collapsibleStates).length === 0) return defaultState;
-            return window.ShevaCore.state.collapsibleStates[id] === true;
+            if (Object.keys(window.HeliosCore.state.collapsibleStates).length === 0) return defaultState;
+            return window.HeliosCore.state.collapsibleStates[id] === true;
         };
 
-        const isTargetSelected = window.ShevaCore.state.targetColumnIndex !== null;
-        const isHypothesisReady = window.ShevaCore.state.isDataDiscretized;
-        const isComparisonSelected = window.ShevaCore.state.comparisonColumnIndices.length > 0;
+        const isTargetSelected = window.HeliosCore.state.targetColumnIndex !== null;
+        const isHypothesisReady = window.HeliosCore.state.isDataDiscretized;
+        const isComparisonSelected = window.HeliosCore.state.comparisonColumnIndices.length > 0;
 
         const sampleState = getSectionState('data-sample-section', true);
         const descriptionState = getSectionState('description-section', true);
@@ -641,7 +699,7 @@ document.addEventListener('DOMContentLoaded', () => {
         let tableHTML = `
             <div id="data-sample-section" class="collapsible-section">
                 <div class="flex justify-between items-center mb-4 cursor-pointer collapsible-header" data-interactive="true">
-                    <h2 class="text-xl font-semibold">Data Sample (${fileName} - ${window.ShevaCore.state.tableData.rows.length} records)</h2>
+                    <h2 class="text-xl font-semibold">Data Sample (${fileName} - ${window.HeliosCore.state.tableData.rows.length} records)</h2>
                     <i class="fas ${sampleState ? 'fa-chevron-up' : 'fa-chevron-down'} text-gray-600 collapse-icon"></i>
                 </div>
 
@@ -665,10 +723,10 @@ document.addEventListener('DOMContentLoaded', () => {
                             <thead class="bg-gray-100">
                                 <tr>`;
 
-        window.ShevaCore.state.tableData.headers.forEach((header, index) => {
-            const isNumeric = window.ShevaCore.isColumnNumeric(index);
-            const isTarget = index === window.ShevaCore.state.targetColumnIndex;
-            const isComparison = window.ShevaCore.state.comparisonColumnIndices.includes(index);
+        window.HeliosCore.state.tableData.headers.forEach((header, index) => {
+            const isNumeric = window.HeliosCore.isColumnNumeric(index);
+            const isTarget = index === window.HeliosCore.state.targetColumnIndex;
+            const isComparison = window.HeliosCore.state.comparisonColumnIndices.includes(index);
 
             let targetIconHTML = '';
             if (isNumeric) {
@@ -681,9 +739,9 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             let comparisonIconHTML = '';
-            if (window.ShevaCore.state.isDataDiscretized && !isTarget) {
+            if (window.HeliosCore.state.isDataDiscretized && !isTarget) {
                 comparisonIconHTML = `<i class="fas fa-users ml-3 ${isComparison ? 'text-purple-500' : 'text-gray-400'} hover:text-purple-600 cursor-pointer compare-groups-icon" data-index="${index}" title="Set as comparison column"></i>`;
-            } else if (!window.ShevaCore.state.isDataDiscretized && !isTarget) {
+            } else if (!window.HeliosCore.state.isDataDiscretized && !isTarget) {
                 comparisonIconHTML = `<i class="fas fa-users ml-3 text-gray-200 cursor-not-allowed" title="Discretize data to enable group comparison"></i>`;
             }
 
@@ -705,7 +763,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         tableHTML += `</tr></thead><tbody class="text-gray-700">`;
 
-        window.ShevaCore.state.tableData.rows.slice(0, 5).forEach((row, rowIndex) => {
+        window.HeliosCore.state.tableData.rows.slice(0, 5).forEach((row, rowIndex) => {
             const rowClass = rowIndex % 2 === 0 ? 'bg-white' : 'bg-gray-50';
             tableHTML += `<tr class="${rowClass}">`;
             row.forEach(cell => {
@@ -723,7 +781,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 </div>
                 <div class="collapsible-content ${descriptionState ? 'expanded' : ''}">
                     <textarea id="dataset-description" class="w-full p-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500" rows="4"
-                              placeholder="Describe the context and objective of this dataset analysis. This information will help the LLM generate more relevant and contextualized insights.">${window.ShevaCore.state.datasetDescriptionText}</textarea>
+                              placeholder="Describe the context and objective of this dataset analysis. This information will help the LLM generate more relevant and contextualized insights.">${window.HeliosCore.state.datasetDescriptionText}</textarea>
                 </div>
             </div>
 
@@ -757,7 +815,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     <div class="flex items-center space-x-4 mb-4 bg-gray-50 p-4 rounded-lg">
                         <label for="column-select" class="font-medium">Analyze Column:</label>
                         <select id="column-select" class="flex-grow p-2 border border-gray-300 rounded-md">
-                            ${window.ShevaCore.state.tableData.headers.map(h => `<option value="${h}">${h}</option>`).join('')}
+                            ${window.HeliosCore.state.tableData.headers.map(h => `<option value="${h}">${h}</option>`).join('')}
                         </select>
                         <button id="generate-dashboard-btn" class="bg-green-600 text-white font-bold py-2 px-4 rounded-lg hover:bg-green-700 transition duration-300">
                             <i class="fas fa-chart-line mr-2"></i>Analyze
@@ -812,7 +870,7 @@ document.addEventListener('DOMContentLoaded', () => {
             icon.addEventListener('click', (e) => {
                 e.stopPropagation();
                 const index = parseInt(e.currentTarget.dataset.index);
-                window.ShevaCore.deleteColumn(index);
+                window.HeliosCore.deleteColumn(index);
                 renderTable(csvFileInput.files[0]?.name || 'data', true);
             })
         );
@@ -821,7 +879,7 @@ document.addEventListener('DOMContentLoaded', () => {
             icon.addEventListener('click', (e) => {
                 e.stopPropagation();
                 const index = parseInt(e.currentTarget.dataset.index);
-                window.ShevaCore.selectTargetColumn(index);
+                window.HeliosCore.selectTargetColumn(index);
                 renderTable(csvFileInput.files[0]?.name || 'data', true);
             })
         );
@@ -830,7 +888,7 @@ document.addEventListener('DOMContentLoaded', () => {
             icon.addEventListener('click', (e) => {
                 e.stopPropagation();
                 const index = parseInt(e.currentTarget.dataset.index);
-                window.ShevaCore.selectComparisonColumn(index);
+                window.HeliosCore.selectComparisonColumn(index);
                 renderTable(csvFileInput.files[0]?.name || 'data', true);
             })
         );
@@ -839,13 +897,13 @@ document.addEventListener('DOMContentLoaded', () => {
             icon.addEventListener('click', (e) => {
                 e.stopPropagation();
                 const index = parseInt(e.currentTarget.dataset.index);
-                window.ShevaCore.mapColumnToBinary(index);
+                window.HeliosCore.mapColumnToBinary(index);
                 renderTable(csvFileInput.files[0]?.name || 'data', true);
             })
         );
 
         document.getElementById('discretize-btn')?.addEventListener('click', () => {
-            window.ShevaCore.discretizeData();
+            window.HeliosCore.discretizeData();
             renderTable(csvFileInput.files[0]?.name || 'data', true);
         });
 
@@ -872,7 +930,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const save = () => {
             const index = parseInt(icon.dataset.index);
             const newName = renameInput.value.trim();
-            window.ShevaCore.renameColumn(index, newName);
+            window.HeliosCore.renameColumn(index, newName);
             renderTable(csvFileInput.files[0]?.name || 'data', true);
         };
 
@@ -889,9 +947,9 @@ document.addEventListener('DOMContentLoaded', () => {
         const numericStats = [];
         const categoricalStats = { columns: [], allCategories: new Set(), frequencies: {} };
 
-        window.ShevaCore.state.tableData.headers.forEach((header, index) => {
-            if (window.ShevaCore.isColumnNumeric(index)) {
-                const numericData = window.ShevaCore.state.tableData.rows
+        window.HeliosCore.state.tableData.headers.forEach((header, index) => {
+            if (window.HeliosCore.isColumnNumeric(index)) {
+                const numericData = window.HeliosCore.state.tableData.rows
                     .map(row => parseFloat(row[index]))
                     .filter(n => !isNaN(n));
 
@@ -909,7 +967,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     });
                 }
             } else {
-                const columnData = window.ShevaCore.state.tableData.rows.map(row => row[index]);
+                const columnData = window.HeliosCore.state.tableData.rows.map(row => row[index]);
                 const validData = columnData.filter(val => val != null && val.toString().trim() !== '');
 
                 if (validData.length > 0) {
@@ -939,11 +997,11 @@ document.addEventListener('DOMContentLoaded', () => {
         const container = document.getElementById('summary-numeric-chart-container');
         const ctx = document.getElementById('summary-numeric-chart').getContext('2d');
 
-        if (window.ShevaCore.state.summaryNumericChartInstance) {
-            window.ShevaCore.state.summaryNumericChartInstance.destroy();
+        if (window.HeliosCore.state.summaryNumericChartInstance) {
+            window.HeliosCore.state.summaryNumericChartInstance.destroy();
         }
 
-        window.ShevaCore.state.summaryNumericChartInstance = new Chart(ctx, {
+        window.HeliosCore.state.summaryNumericChartInstance = new Chart(ctx, {
             type: 'bar',
             data: {
                 labels: numericStats.map(s => s.name),
@@ -971,8 +1029,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const container = document.getElementById('summary-categorical-chart-container');
         const ctx = document.getElementById('summary-categorical-chart').getContext('2d');
 
-        if (window.ShevaCore.state.summaryCategoricalChartInstance) {
-            window.ShevaCore.state.summaryCategoricalChartInstance.destroy();
+        if (window.HeliosCore.state.summaryCategoricalChartInstance) {
+            window.HeliosCore.state.summaryCategoricalChartInstance.destroy();
         }
 
         const uniqueCategoryList = Array.from(categoricalStats.allCategories);
@@ -988,7 +1046,7 @@ document.addEventListener('DOMContentLoaded', () => {
             backgroundColor: colors[i % colors.length]
         }));
 
-        window.ShevaCore.state.summaryCategoricalChartInstance = new Chart(ctx, {
+        window.HeliosCore.state.summaryCategoricalChartInstance = new Chart(ctx, {
             type: 'bar',
             data: { labels: categoricalStats.columns, datasets: datasets },
             options: {
@@ -1016,14 +1074,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const select = document.getElementById('column-select');
         const selectedColumnName = select.value;
-        const columnIndex = window.ShevaCore.state.tableData.headers.indexOf(selectedColumnName);
+        const columnIndex = window.HeliosCore.state.tableData.headers.indexOf(selectedColumnName);
 
         if (columnIndex === -1) return alert("Column not found.");
 
-        const columnData = window.ShevaCore.state.tableData.rows.map(row => row[columnIndex]);
+        const columnData = window.HeliosCore.state.tableData.rows.map(row => row[columnIndex]);
         const validData = columnData.filter(val => val != null && val.toString().trim() !== '');
 
-        if (window.ShevaCore.isColumnNumeric(columnIndex)) {
+        if (window.HeliosCore.isColumnNumeric(columnIndex)) {
             const numericData = validData.map(Number).filter(n => !isNaN(n));
             generateNumericDashboard(selectedColumnName, numericData, columnData.length);
         } else {
@@ -1119,11 +1177,11 @@ document.addEventListener('DOMContentLoaded', () => {
         const container = document.getElementById('chart-container');
         const ctx = document.getElementById('analysis-chart').getContext('2d');
 
-        if (window.ShevaCore.state.analysisChartInstance) {
-            window.ShevaCore.state.analysisChartInstance.destroy();
+        if (window.HeliosCore.state.analysisChartInstance) {
+            window.HeliosCore.state.analysisChartInstance.destroy();
         }
 
-        window.ShevaCore.state.analysisChartInstance = new Chart(ctx, {
+        window.HeliosCore.state.analysisChartInstance = new Chart(ctx, {
             type: type,
             data: {
                 labels: labels,
@@ -1150,11 +1208,11 @@ document.addEventListener('DOMContentLoaded', () => {
      * Generates hypotheses by calling the backend API.
      */
     const generateHypotheses = (generationParams, appendHypotheses = false) => {
-        if (window.ShevaCore.state.targetColumnIndex === null) {
+        if (window.HeliosCore.state.targetColumnIndex === null) {
             alert("Please select a target column before generating hypotheses.");
             return;
         }
-        if (!window.ShevaCore.state.isDataDiscretized) {
+        if (!window.HeliosCore.state.isDataDiscretized) {
             alert("Please discretize the data before generating hypotheses.");
             return;
         }
@@ -1181,7 +1239,7 @@ document.addEventListener('DOMContentLoaded', () => {
         activateCollapsible('hypothesis-generation-panel');
         updateCollapsibleHeight(resultsArea);
 
-        const stringifiedRows = window.ShevaCore.state.tableData.rows.map(row => row.map(cell => String(cell)));
+        const stringifiedRows = window.HeliosCore.state.tableData.rows.map(row => row.map(cell => String(cell)));
 
         const description = document.getElementById('dataset-description').value;
 
@@ -1192,12 +1250,12 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         const payload = {
-            headers: window.ShevaCore.state.tableData.headers,
+            headers: window.HeliosCore.state.tableData.headers,
             rows: stringifiedRows,
-            target_column_index: window.ShevaCore.state.targetColumnIndex,
+            target_column_index: window.HeliosCore.state.targetColumnIndex,
             description: description,
             methods: generationParams,
-            comparison_column_indices: window.ShevaCore.state.comparisonColumnIndices
+            comparison_column_indices: window.HeliosCore.state.comparisonColumnIndices
         };
 
         const requestPromise = hasAIOnly
@@ -1218,6 +1276,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 console.log("Response from backend:", data);
 
                 let persistedAdvisorHTML = '';
+                let persistedDataContextHTML = '';
                     const existingAdvisorBox = document.getElementById('ai-progress-box');
 
                     if (existingAdvisorBox) {
@@ -1226,9 +1285,20 @@ document.addEventListener('DOMContentLoaded', () => {
                             persistedAdvisorHTML = advisorCard.outerHTML;
                         }
                     }
+
+                    const dataContextCard =
+                        document.getElementById('ai-data-context')?.closest(
+                            '.rounded-xl.border.border-sky-200'
+                        );
+
+                    if (dataContextCard) {
+                        persistedDataContextHTML = dataContextCard.outerHTML;
+                    }
+
                 if (!appendHypotheses || !document.getElementById('tab-table')) {
                     resultsArea.innerHTML = `
-                     ${persistedAdvisorHTML}
+                    ${persistedDataContextHTML}
+                    ${persistedAdvisorHTML}
                     <nav class="-mb-px flex space-x-8" aria-label="Tabs">
                         <button id="tab-table" class="tab-btn whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm text-blue-600 border-blue-600" data-tab="table">
                             <i class="fas fa-table mr-2"></i>Table View
@@ -1290,8 +1360,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
 
                 if (data && data.final_hypotheses_df) {
-                    const targetColumnData = window.ShevaCore.state.tableData.rows
-                        .map(row => parseFloat(row[window.ShevaCore.state.targetColumnIndex]))
+                    const targetColumnData = window.HeliosCore.state.tableData.rows
+                        .map(row => parseFloat(row[window.HeliosCore.state.targetColumnIndex]))
                         .filter(n => !isNaN(n));
 
                     const n = targetColumnData.length;
@@ -1299,12 +1369,12 @@ document.addEventListener('DOMContentLoaded', () => {
                     const variance = n > 0 ? targetColumnData.reduce((acc, val) => acc + Math.pow(val - mean, 2), 0) / n : 0;
 
                     const targetInfoForDisplay = {
-                        name: window.ShevaCore.state.tableData.headers[window.ShevaCore.state.targetColumnIndex],
+                        name: window.HeliosCore.state.tableData.headers[window.HeliosCore.state.targetColumnIndex],
                         mean: mean,
                         variance: variance
                     };
 
-                    window.hypothesesApp.fullDataset = JSON.parse(JSON.stringify(window.ShevaCore.state.tableData));
+                    window.hypothesesApp.fullDataset = JSON.parse(JSON.stringify(window.HeliosCore.state.tableData));
                     window.hypothesesApp.targetInfo = targetInfoForDisplay;
 
                     let finalHypotheses = data.final_hypotheses_df;
@@ -1339,7 +1409,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
                     
 
-                    setupAndRenderHypotheses(hypotheses, data.sunburst_json, targetInfoForDisplay, window.ShevaCore.state.tableData);
+                    setupAndRenderHypotheses(hypotheses, data.sunburst_json, targetInfoForDisplay, window.HeliosCore.state.tableData);
 
                     const downloadContainer = document.getElementById('hypotheses-download-container');
                     renderDownloadHypothesesButton(downloadContainer);

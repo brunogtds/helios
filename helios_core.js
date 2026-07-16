@@ -1,14 +1,14 @@
 /**
- * @file sheva_core.js - Core data management and preprocessing logic for SHEVA 2.0
+ * @file helios_core.js - Core data management and preprocessing logic for HELIOS 2.0
  * Handles CSV parsing, data transformations, column operations, and state management.
  * 
- * @author SHEVA Team
+ * @author HELIOS Team
  * @version 2.0.0
  */
 
 // --- GLOBAL STATE MANAGEMENT ---
 // Centralized state object for the application
-const ShevaState = {
+const HeliosState = {
     tableData: {
         headers: [],
         rows: []
@@ -104,8 +104,8 @@ function loadCSVFile(file, callback) {
         }
         
         // Parse CSV
-        ShevaState.tableData.headers = robustParseCSVRow(headerLine, delimiter);
-        ShevaState.tableData.rows = lines.slice(1).map(row => {
+        HeliosState.tableData.headers = robustParseCSVRow(headerLine, delimiter);
+        HeliosState.tableData.rows = lines.slice(1).map(row => {
             if (row.trim() === '') return null;
             return robustParseCSVRow(row, delimiter);
         }).filter(row => row !== null);
@@ -124,11 +124,11 @@ function loadCSVFile(file, callback) {
  * Resets the application state for a new dataset.
  */
 function resetApplicationState() {
-    ShevaState.targetColumnIndex = null;
-    ShevaState.comparisonColumnIndices = [];
-    ShevaState.datasetDescriptionText = '';
-    ShevaState.isDataDiscretized = false;
-    ShevaState.collapsibleStates = {};
+    HeliosState.targetColumnIndex = null;
+    HeliosState.comparisonColumnIndices = [];
+    HeliosState.datasetDescriptionText = '';
+    HeliosState.isDataDiscretized = false;
+    HeliosState.collapsibleStates = {};
 }
 
 // --- DATA TYPE DETECTION ---
@@ -139,9 +139,9 @@ function resetApplicationState() {
  * @returns {boolean} - True if the column is classified as numeric.
  */
 function isColumnNumeric(columnIndex) {
-    if (!ShevaState.tableData.rows || ShevaState.tableData.rows.length === 0) return false;
+    if (!HeliosState.tableData.rows || HeliosState.tableData.rows.length === 0) return false;
     
-    const columnData = ShevaState.tableData.rows.map(row => row[columnIndex]);
+    const columnData = HeliosState.tableData.rows.map(row => row[columnIndex]);
     const validData = columnData.filter(val => val != null && val.toString().trim() !== '');
     
     if (validData.length === 0) return false;
@@ -159,7 +159,7 @@ function isColumnBinary(columnIndex) {
     if (isColumnNumeric(columnIndex)) {
         return false;
     }
-    const uniqueValues = [...new Set(ShevaState.tableData.rows.map(row => row[columnIndex])
+    const uniqueValues = [...new Set(HeliosState.tableData.rows.map(row => row[columnIndex])
         .filter(val => val != null && val.toString().trim() !== ''))];
     return uniqueValues.length === 2;
 }
@@ -173,7 +173,7 @@ function isTrueContinuous(columnIndex) {
     if (!isColumnNumeric(columnIndex)) {
         return false;
     }
-    const uniqueValues = [...new Set(ShevaState.tableData.rows.map(row => row[columnIndex]))];
+    const uniqueValues = [...new Set(HeliosState.tableData.rows.map(row => row[columnIndex]))];
     return uniqueValues.length > 2;
 }
 
@@ -184,12 +184,12 @@ function isTrueContinuous(columnIndex) {
  * @param {number} index - The index of the column to be set as the target.
  */
 function selectTargetColumn(index) {
-    if (ShevaState.targetColumnIndex === index) {
-        ShevaState.targetColumnIndex = null;
+    if (HeliosState.targetColumnIndex === index) {
+        HeliosState.targetColumnIndex = null;
     } else {
-        ShevaState.targetColumnIndex = index;
-        if (ShevaState.comparisonColumnIndices.includes(index)) {
-            ShevaState.comparisonColumnIndices = ShevaState.comparisonColumnIndices.filter(i => i !== index);
+        HeliosState.targetColumnIndex = index;
+        if (HeliosState.comparisonColumnIndices.includes(index)) {
+            HeliosState.comparisonColumnIndices = HeliosState.comparisonColumnIndices.filter(i => i !== index);
         }
     }
 }
@@ -199,16 +199,16 @@ function selectTargetColumn(index) {
  * @param {number} index - The index of the column to toggle.
  */
 function selectComparisonColumn(index) {
-    if (!ShevaState.isDataDiscretized) {
+    if (!HeliosState.isDataDiscretized) {
         alert("Please discretize the numeric data before selecting comparison columns.");
         return;
     }
     
-    const selectionIndex = ShevaState.comparisonColumnIndices.indexOf(index);
+    const selectionIndex = HeliosState.comparisonColumnIndices.indexOf(index);
     if (selectionIndex > -1) {
-        ShevaState.comparisonColumnIndices.splice(selectionIndex, 1);
+        HeliosState.comparisonColumnIndices.splice(selectionIndex, 1);
     } else {
-        ShevaState.comparisonColumnIndices.push(index);
+        HeliosState.comparisonColumnIndices.push(index);
     }
 }
 
@@ -218,8 +218,8 @@ function selectComparisonColumn(index) {
  * @param {string} newName - The new name for the column.
  */
 function renameColumn(index, newName) {
-    if (newName && newName !== ShevaState.tableData.headers[index]) {
-        ShevaState.tableData.headers[index] = newName;
+    if (newName && newName !== HeliosState.tableData.headers[index]) {
+        HeliosState.tableData.headers[index] = newName;
     }
 }
 
@@ -228,17 +228,17 @@ function renameColumn(index, newName) {
  * @param {number} index - The index of the column to delete.
  */
 function deleteColumn(index) {
-    ShevaState.tableData.headers.splice(index, 1);
+    HeliosState.tableData.headers.splice(index, 1);
     
     // Adjust target index
-    if (index === ShevaState.targetColumnIndex) {
-        ShevaState.targetColumnIndex = null;
-    } else if (ShevaState.targetColumnIndex !== null && index < ShevaState.targetColumnIndex) {
-        ShevaState.targetColumnIndex--;
+    if (index === HeliosState.targetColumnIndex) {
+        HeliosState.targetColumnIndex = null;
+    } else if (HeliosState.targetColumnIndex !== null && index < HeliosState.targetColumnIndex) {
+        HeliosState.targetColumnIndex--;
     }
     
     // Adjust comparison indices
-    ShevaState.comparisonColumnIndices = ShevaState.comparisonColumnIndices
+    HeliosState.comparisonColumnIndices = HeliosState.comparisonColumnIndices
         .map(i => {
             if (i === index) return -1;
             if (i > index) return i - 1;
@@ -246,7 +246,7 @@ function deleteColumn(index) {
         })
         .filter(i => i !== -1);
     
-    ShevaState.tableData.rows.forEach(row => row.splice(index, 1));
+    HeliosState.tableData.rows.forEach(row => row.splice(index, 1));
 }
 
 /**
@@ -259,7 +259,7 @@ function mapColumnToBinary(columnIndex) {
         return;
     }
     
-    const columnData = ShevaState.tableData.rows.map(row => row[columnIndex]);
+    const columnData = HeliosState.tableData.rows.map(row => row[columnIndex]);
     const uniqueValues = [...new Set(columnData.filter(val => val != null && val.toString().trim() !== ''))];
     
     let valueMap = {};
@@ -300,7 +300,7 @@ function mapColumnToBinary(columnIndex) {
         };
     }
     
-    const newRows = ShevaState.tableData.rows.map(row => {
+    const newRows = HeliosState.tableData.rows.map(row => {
         const newRow = [...row];
         const cellValue = newRow[columnIndex];
         
@@ -312,8 +312,8 @@ function mapColumnToBinary(columnIndex) {
         return newRow;
     });
     
-    ShevaState.tableData.rows = newRows;
-    alert(`Column "${ShevaState.tableData.headers[columnIndex]}" has been mapped.`);
+    HeliosState.tableData.rows = newRows;
+    alert(`Column "${HeliosState.tableData.headers[columnIndex]}" has been mapped.`);
 }
 
 // --- DATA DISCRETIZATION ---
@@ -322,35 +322,35 @@ function mapColumnToBinary(columnIndex) {
  * Discretizes continuous numeric columns into categorical bins based on quartiles.
  */
 function discretizeData() {
-    if (ShevaState.targetColumnIndex === null) {
+    if (HeliosState.targetColumnIndex === null) {
         alert("Please select a target column before discretizing data.");
         return;
     }
     
     const newHeaders = [];
-    const newRows = ShevaState.tableData.rows.map(() => []);
-    const originalTargetHeader = ShevaState.tableData.headers[ShevaState.targetColumnIndex];
+    const newRows = HeliosState.tableData.rows.map(() => []);
+    const originalTargetHeader = HeliosState.tableData.headers[HeliosState.targetColumnIndex];
     
-    ShevaState.tableData.headers.forEach((header, index) => {
-        const isTarget = index === ShevaState.targetColumnIndex;
+    HeliosState.tableData.headers.forEach((header, index) => {
+        const isTarget = index === HeliosState.targetColumnIndex;
         const shouldDiscretize = isTrueContinuous(index) && !isTarget;
         
         if (shouldDiscretize) {
             const newHeaderName = `${header}_Class`;
             newHeaders.push(newHeaderName);
             
-            const numericValues = ShevaState.tableData.rows
+            const numericValues = HeliosState.tableData.rows
                 .map(row => parseFloat(row[index]))
                 .filter(v => !isNaN(v));
             
             if (numericValues.length === 0) {
-                ShevaState.tableData.rows.forEach((row, rowIndex) => newRows[rowIndex].push('NA'));
+                HeliosState.tableData.rows.forEach((row, rowIndex) => newRows[rowIndex].push('NA'));
                 return;
             }
             
             const uniqueNumericValues = [...new Set(numericValues)];
             if (uniqueNumericValues.length <= 1) {
-                ShevaState.tableData.rows.forEach((row, rowIndex) => 
+                HeliosState.tableData.rows.forEach((row, rowIndex) => 
                     newRows[rowIndex].push(String(uniqueNumericValues[0] || 'NA')));
                 return;
             }
@@ -380,7 +380,7 @@ function discretizeData() {
                 labels.push(`${Math.trunc(binEdges[i])}-${Math.trunc(binEdges[i+1])}`);
             }
             
-            ShevaState.tableData.rows.forEach((row, rowIndex) => {
+            HeliosState.tableData.rows.forEach((row, rowIndex) => {
                 const val = parseFloat(row[index]);
                 let binLabel = 'NA';
                 
@@ -403,26 +403,26 @@ function discretizeData() {
             });
         } else if (isColumnNumeric(index) && !isTrueContinuous(index) && !isTarget) {
             newHeaders.push(header);
-            ShevaState.tableData.rows.forEach((row, rowIndex) => {
+            HeliosState.tableData.rows.forEach((row, rowIndex) => {
                 newRows[rowIndex].push(String(row[index]));
             });
         } else {
             newHeaders.push(header);
-            ShevaState.tableData.rows.forEach((row, rowIndex) => {
+            HeliosState.tableData.rows.forEach((row, rowIndex) => {
                 newRows[rowIndex].push(row[index]);
             });
         }
     });
     
-    ShevaState.tableData.headers = newHeaders;
-    ShevaState.tableData.rows = newRows;
-    ShevaState.targetColumnIndex = ShevaState.tableData.headers.indexOf(originalTargetHeader);
-    ShevaState.isDataDiscretized = true;
+    HeliosState.tableData.headers = newHeaders;
+    HeliosState.tableData.rows = newRows;
+    HeliosState.targetColumnIndex = HeliosState.tableData.headers.indexOf(originalTargetHeader);
+    HeliosState.isDataDiscretized = true;
 }
 
 // --- EXPORT STATE AND FUNCTIONS ---
-window.ShevaCore = {
-    state: ShevaState,
+window.HeliosCore = {
+    state: HeliosState,
     loadCSVFile,
     isColumnNumeric,
     isColumnBinary,

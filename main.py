@@ -99,7 +99,9 @@ def init_ai_progress(job_id, total_runs):
         "last_completed_run": 0,
         "phase": "starting",
         "advisor_text": "",
-        "advisor_status": "pending"
+        "advisor_status": "pending",
+        "data_context": "",
+        "selected_test_type": None
     }
 
 
@@ -313,6 +315,78 @@ TEST_TYPE_LABELS = {
     "anova_test": "ANOVA",
     "levene_test": "Levene's test"
 }
+
+
+def resolve_selected_test_type(params, user_prompt=""):
+    """Resolve an explicit UI selection first, otherwise infer a single test from the user prompt."""
+    explicit = str((params or {}).get("selected_test_type") or "").strip().lower()
+    aliases = {
+        "": None,
+        "auto": None,
+        "all": None,
+        "any": None,
+        "one_sample_t_test": "one_sample_t_test",
+        "one-sample t-test": "one_sample_t_test",
+        "one sample t test": "one_sample_t_test",
+        "student t test": "one_sample_t_test",
+        "welch_t_test": "welch_t_test",
+        "welch's t-test": "welch_t_test",
+        "welch t-test": "welch_t_test",
+        "welch": "welch_t_test",
+        "anova_test": "anova_test",
+        "anova": "anova_test",
+        "levene_test": "levene_test",
+        "levene's test": "levene_test",
+        "levene": "levene_test",
+    }
+    if explicit in aliases:
+        return aliases[explicit]
+
+    prompt = str(user_prompt or "").lower()
+    prompt_patterns = [
+        ("one_sample_t_test", ["one-sample t-test", "one sample t-test", "one sample t test", "student t-test", "student's t-test"]),
+        ("welch_t_test", ["welch's t-test", "welch t-test", "welch test", "welch"]),
+        ("anova_test", ["anova", "analysis of variance"]),
+        ("levene_test", ["levene's test", "levene test", "levene"]),
+    ]
+    matches = [test for test, patterns in prompt_patterns if any(p in prompt for p in patterns)]
+    return matches[0] if len(set(matches)) == 1 else None
+
+
+def build_data_context(full_df, selected_dimension, selected_test_type=None):
+    """Create the exact target-aware context sent to the agents."""
+    context_df = full_df.copy()
+    context_df[selected_dimension] = pd.to_numeric(context_df[selected_dimension], errors="coerce")
+    context_df = context_df.dropna(subset=[selected_dimension]).reset_index(drop=True)
+    return utils.describe_dataset_detailed(
+        context_df,
+        target_column=selected_dimension,
+        selected_test_type=selected_test_type,
+    )
+
+
+def enforce_selected_test_type(hypotheses, selected_test_type):
+    """Hard-enforce a single selected statistical test before any statistic is executed."""
+    if not selected_test_type:
+        return hypotheses
+    enforced = []
+    for hypothesis in hypotheses:
+        h = dict(hypothesis)
+        h["test_type"] = selected_test_type
+        if selected_test_type == "levene_test":
+            h["aggregation"] = "variance"
+            h["comparison"] = ">"
+            h["comparison_scope"] = h.get("comparison_scope") or "group_vs_rest"
+        else:
+            h["aggregation"] = "mean"
+            if h.get("comparison") not in {">", "<"}:
+                h["comparison"] = ">"
+            h["comparison_scope"] = (
+                "group_vs_global" if selected_test_type == "one_sample_t_test"
+                else (h.get("comparison_scope") or "group_vs_rest")
+            )
+        enforced.append(h)
+    return enforced
 
 
 def normalize_test_type(test_type, aggregation="mean"):
@@ -598,10 +672,17 @@ def generate_statistical_advice(full_df, selected_dimension, params, job_id=None
     api_key = params.get('api_key', '')
     model_name = params.get('model_name', 'gpt-5.4-mini')
     temperature = float(params.get('temperature', 0.2))
+    selected_test_type = resolve_selected_test_type(params, user_prompt)
 
     try:
         llm = build_llm(provider, model_name, temperature, api_key)
-        data_context = utils.describe_dataset_detailed(full_df)
+        data_context = build_data_context(full_df, selected_dimension, selected_test_type)
+        if selected_test_type:
+            user_prompt = (
+                f"{user_prompt}\n\nThe user explicitly restricted this run to "
+                f"{TEST_TYPE_LABELS[selected_test_type]} ({selected_test_type}). "
+                "Do not recommend or use any other statistical test."
+            )
         prompt = PromptTemplate.from_template(STATISTICAL_ADVISOR_PROMPT)
         chain = prompt | llm
 
@@ -609,7 +690,9 @@ def generate_statistical_advice(full_df, selected_dimension, params, job_id=None
             update_ai_progress(
                 job_id,
                 advisor_status="running",
-                advisor_text="Analyzing your goal and selecting the most appropriate statistical tests..."
+                advisor_text="Analyzing your goal and selecting the most appropriate statistical tests...",
+                data_context=data_context,
+                selected_test_type=selected_test_type
             )
 
         response_chunks = []
@@ -662,6 +745,7 @@ def discover_with_ai_agent(full_df, discretized_df, original_df, selected_dimens
     api_key = params.get('api_key', '')
     model_name = params.get('model_name', 'gpt-5.4-mini')
     temperature = float(params.get('temperature', 0.5))
+    selected_test_type = resolve_selected_test_type(params, user_prompt)
 
     total_iterations = int(params.get('total_iterations', 3))
     if job_id:
@@ -695,7 +779,19 @@ def discover_with_ai_agent(full_df, discretized_df, original_df, selected_dimens
         debug_logs["error"] = str(e)
         return pd.DataFrame(), debug_logs
 
-    data_context = utils.describe_dataset_detailed(full_df)
+    data_context = build_data_context(full_df, selected_dimension, selected_test_type)
+    if selected_test_type:
+        user_prompt = (
+            f"{user_prompt}\n\nSTRICT STATISTICAL TEST RESTRICTION: Generate hypotheses only for "
+            f"{TEST_TYPE_LABELS[selected_test_type]} using test_type='{selected_test_type}'. "
+            "No other test_type is allowed in this run."
+        )
+    if job_id:
+        update_ai_progress(
+            job_id,
+            data_context=data_context,
+            selected_test_type=selected_test_type
+        )
     prompt = PromptTemplate.from_template(HYPOTHESIS_PROMPT_WITH_MEMORY)
     chain = prompt | llm
 
@@ -756,6 +852,7 @@ def discover_with_ai_agent(full_df, discretized_df, original_df, selected_dimens
                 })
 
                 parsed = normalize_generated_hypotheses(parsed_preview)
+                parsed = enforce_selected_test_type(parsed, selected_test_type)
                 parsed, seen = dedup_hypotheses(parsed, seen)
 
                 if len(parsed) > 0:
@@ -898,7 +995,9 @@ def discover_with_ai_agent(full_df, discretized_df, original_df, selected_dimens
             "current_run": total_iterations,
             "total_runs": total_iterations,
             "advisor_status": AI_PROGRESS.get(job_id, {}).get("advisor_status", "completed"),
-            "advisor_text": AI_PROGRESS.get(job_id, {}).get("advisor_text", "")
+            "advisor_text": AI_PROGRESS.get(job_id, {}).get("advisor_text", ""),
+            "data_context": data_context,
+            "selected_test_type": selected_test_type
         }
 
     return ranked_df, debug_logs
@@ -1716,6 +1815,14 @@ def generate_ai_async(payload: TablePayload):
             discretized_df = df.loc[original_df.index].drop(columns=[selected_dimension])
             global_mean = original_df[selected_dimension].mean()
 
+            selected_test_type = resolve_selected_test_type(params, params.get('prompt', ''))
+            data_context = build_data_context(df, selected_dimension, selected_test_type)
+            update_ai_progress(
+                job_id,
+                data_context=data_context,
+                selected_test_type=selected_test_type
+            )
+
             advisor_text = generate_statistical_advice(
                 df,
                 selected_dimension,
@@ -1762,7 +1869,9 @@ def generate_ai_async(payload: TablePayload):
                     "methods": [{"algorithm_name": "AI Agent", **params, "ai_agent_logs": ai_logs}],
                     "selected_dimension": selected_dimension,
                     "global_mean": global_mean,
-                    "statistical_advice": advisor_text
+                    "statistical_advice": advisor_text,
+                    "selected_test_type": selected_test_type,
+                    "data_context": data_context
                 },
                 "final_hypotheses_df": json.loads(formatted_results_df.to_json(orient='records')),
                 "sunburst_json": None
@@ -1780,7 +1889,9 @@ def generate_ai_async(payload: TablePayload):
                 live_run_hypotheses=[],
                 last_completed_run=total_runs,
                 advisor_status=AI_PROGRESS.get(job_id, {}).get("advisor_status", "completed"),
-                advisor_text=AI_PROGRESS.get(job_id, {}).get("advisor_text", "")
+                advisor_text=AI_PROGRESS.get(job_id, {}).get("advisor_text", ""),
+                data_context=data_context,
+                selected_test_type=selected_test_type
             )
 
         except Exception as e:
@@ -1837,10 +1948,64 @@ async def generate_statistical_advice_stream(payload: TablePayload):
 
             llm = build_llm(provider, model_name, temperature, api_key)
 
-            df = pd.DataFrame(payload.rows, columns=payload.headers)
-            data_context = utils.describe_dataset_detailed(df)
+            df = pd.DataFrame(
+                payload.rows,
+                columns=payload.headers
+            )
 
-            prompt = STATISTICAL_ADVISOR_PROMPT
+            selected_dimension = df.columns[
+                payload.target_column_index
+            ]
+
+            df[selected_dimension] = pd.to_numeric(
+                df[selected_dimension],
+                errors="coerce"
+            )
+
+            target_values = (
+                df[selected_dimension]
+                .dropna()
+            )
+
+            advisor_context = {
+                "row_count": int(len(df)),
+                "column_count": int(len(df.columns)),
+                "target_column": selected_dimension,
+                "target_valid_count": int(len(target_values)),
+                "target_mean": (
+                    float(target_values.mean())
+                    if len(target_values) > 0
+                    else None
+                ),
+                "target_std": (
+                    float(target_values.std())
+                    if len(target_values) > 1
+                    else None
+                ),
+                "columns": list(df.columns)
+            }
+
+            data_context = json.dumps(
+                advisor_context,
+                indent=2,
+                ensure_ascii=False
+            )
+
+
+            user_intent = payload.description or ""
+            selected_test_type = resolve_selected_test_type(ai_params, user_intent)
+            if selected_test_type:
+                user_intent = (
+                    f"{user_intent}\n\nThe user explicitly restricted this run to "
+                    f"{TEST_TYPE_LABELS[selected_test_type]} ({selected_test_type}). "
+                    "Do not recommend any other test."
+                )
+
+            prompt = STATISTICAL_ADVISOR_PROMPT.format(
+                user_intent=user_intent,
+                target_dimension=selected_dimension,
+                data_context=data_context
+            )
 
             full_text = ""
 

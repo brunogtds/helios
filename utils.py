@@ -770,121 +770,311 @@ def generate_textual_summary(df: pd.DataFrame) -> str:
 
     return "\n".join(summary_lines)
 
-# --- ENHANCED DATASET SUMMARY (AI AGENT) ---
+# --- TARGET-AWARE DATASET CONTEXT (AI AGENT) ---
 
-def safe_format(value, format_str="{:.2f}"):
-    """Função auxiliar para lidar com tipos NumPy no retorno textual e formatação segura"""
-    if pd.isna(value) or value is None:
-        return "N/A"
-    try:
-        if isinstance(value, (np.integer, np.floating)):
-            value = value.item()
-        return format_str.format(value)
-    except Exception:
-        return str(value)
+import itertools
+import json
+import math
+from typing import Any
 
-def describe_dataset_detailed(df: pd.DataFrame) -> str:
-    """Gera um sumário textual rico em detalhes estatísticos e alertas de qualidade para o LLM."""
-    summary_lines = []
-    alerts = []
+import numpy as np
+import pandas as pd
+from scipy import stats
 
-    # 1. Metadados Gerais
-    summary_lines.append(f"The dataset contains {df.shape[0]} rows and {df.shape[1]} columns.")
-    summary_lines.append(f"Total duplicated rows: {df.duplicated().sum()}\n")
 
-    # 2. Processar Cada Coluna
-    for col_name in df.columns:
-        col = df[col_name]
-        missing_count = col.isna().sum()
-        missing_percentage = (missing_count / len(df)) * 100
+def _json_value(value: Any) -> Any:
+    if pd.isna(value):
+        return None
+    return value.item() if isinstance(value, np.generic) else value
 
-        # Alerta para Dados Faltantes
-        if missing_percentage > 10.0:
-            alerts.append(f"Missing Data '{col_name}': {missing_percentage:.2f}% faltante. Alto volume de dados faltantes.")
 
-        # Variáveis Numéricas
-        if pd.api.types.is_numeric_dtype(col):
-            stats_dict = col.describe(percentiles=[.05, .50, .95]).to_dict()
-            
-            skewness = safe_format(stats.skew(col.dropna()))
-            kurt = safe_format(stats.kurtosis(col.dropna()))
-            mode_val = col.mode().iloc[0] if len(col.mode()) > 0 else "N/A"
-            
-            summary_lines.append(f"-> Column '{col_name}': Numeric ({col.dtype}).")
-            summary_lines.append(f"   - Range: {safe_format(stats_dict.get('min'))} to {safe_format(stats_dict.get('max'))}")
-            summary_lines.append(f"   - Mean: {safe_format(stats_dict.get('mean'))}, Std Dev: {safe_format(stats_dict.get('std'))}")
-            summary_lines.append(f"   - Median: {safe_format(stats_dict.get('50%'))}, Skewness: {skewness}, Kurtosis: {kurt}")
-            summary_lines.append(f"   - Mode (Most Frequent): {mode_val}")
-            summary_lines.append(f"   - Percentiles (5% / 95%): {safe_format(stats_dict.get('5%'))} / {safe_format(stats_dict.get('95%'))}")
-            summary_lines.append(f"   - Missing values: {missing_count} ({missing_percentage:.2f}%)\n")
-            
-            # Alerta para Assimetria
-            if abs(float(skewness) if skewness != 'N/A' else 0) > 1.0 or abs(float(kurt) if kurt != 'N/A' else 0) > 3.5:
-                alerts.append(f"Numeric '{col_name}': Alta Assimetria/Curtose. Sugere distribuição não-normal/outliers.")
+def _benjamini_hochberg(p_values: list[float]) -> list[float]:
+    values = np.asarray(p_values, dtype=float)
+    if not len(values):
+        return []
+    order = np.argsort(values)
+    ranked = values[order]
+    adjusted = ranked * len(values) / np.arange(1, len(values) + 1)
+    adjusted = np.minimum.accumulate(adjusted[::-1])[::-1]
+    result = np.empty_like(adjusted)
+    result[order] = np.clip(adjusted, 0.0, 1.0)
+    return result.tolist()
 
-        # Variáveis Temporais
-        elif pd.api.types.is_datetime64_any_dtype(col):
-            start = col.min()
-            end = col.max()
-            summary_lines.append(f"-> Column '{col_name}': DateTime ({col.dtype}).")
-            summary_lines.append(f"   - Range: {start} to {end} (Total days: {(end - start).days if pd.notna(end) and pd.notna(start) else 'N/A'})")
-            summary_lines.append(f"   - Missing values: {missing_count} ({missing_percentage:.2f}%)")
-            
-            if len(col.dropna()) > 0:
-                monthly_counts = col.dt.to_period('M').value_counts().sort_index()
-                start_sample = dict(monthly_counts.head(3).astype(str))
-                end_sample = dict(monthly_counts.tail(3).astype(str))
-                summary_lines.append(f"   - Event Counts Sample (Start/End): {start_sample} / {end_sample}\n")
-            else:
-                 summary_lines.append("\n")
 
-        # Variáveis Categóricas/Texto
-        elif pd.api.types.is_object_dtype(col) or pd.api.types.is_categorical_dtype(col):
-            nunique = col.nunique()
-            unique_ratio = nunique / len(df) if len(df) > 0 else 0
-            top_vals = col.value_counts(dropna=False).nlargest(15)
-            top_desc = ', '.join([f"'{val}' ({cnt})" for val, cnt in top_vals.items()])
-            top1_density = (top_vals.iloc[0] / len(df)) * 100 if len(top_vals) > 0 else 0
+def _hedges_g(group: np.ndarray, complement: np.ndarray) -> float:
+    n1, n2 = len(group), len(complement)
+    pooled_variance = (
+        (n1 - 1) * np.var(group, ddof=1)
+        + (n2 - 1) * np.var(complement, ddof=1)
+    ) / (n1 + n2 - 2)
+    if pooled_variance <= 0:
+        return 0.0
+    cohen_d = (np.mean(group) - np.mean(complement)) / math.sqrt(pooled_variance)
+    correction = 1.0 - 3.0 / (4.0 * (n1 + n2) - 9.0)
+    return float(correction * cohen_d)
 
-            type_label = "Categorical/Text"
-            if unique_ratio > 0.95:
-                type_label = "High Cardinality (Possible ID)"
-            
-            summary_lines.append(f"-> Column '{col_name}': {type_label} ({col.dtype}).")
-            summary_lines.append(f"   - Unique values: {nunique} (Ratio: {unique_ratio*100:.2f}%)")
-            summary_lines.append(f"   - Top 1 Density: {top1_density:.2f}% (Indicates class imbalance)")
-            summary_lines.append(f"   - Most frequent (Top 10): {top_desc}")
-            summary_lines.append(f"   - Missing values: {missing_count} ({missing_percentage:.2f}%)\n")
-            
-            if unique_ratio > 0.95:
-                alerts.append(f"Categorical '{col_name}': Alta Cardinalidade. Potencial ID, verificar exclusão/hashing.")
-                
+
+def _compact_profile(df: pd.DataFrame, target: str) -> dict[str, Any]:
+    columns = []
+    for name in df.columns:
+        series = df[name]
+        column: dict[str, Any] = {
+            "name": name,
+            "dtype": str(series.dtype),
+            "missing_fraction": round(float(series.isna().mean()), 6),
+            "unique_count": int(series.nunique(dropna=True)),
+        }
+        if pd.api.types.is_numeric_dtype(series):
+            column["kind"] = "numeric"
+            clean = pd.to_numeric(series, errors="coerce").dropna()
+            if len(clean):
+                quantiles = clean.quantile([0.05, 0.25, 0.5, 0.75, 0.95])
+                column["summary"] = {
+                    "min": float(clean.min()),
+                    "p05": float(quantiles.loc[0.05]),
+                    "p25": float(quantiles.loc[0.25]),
+                    "median": float(quantiles.loc[0.5]),
+                    "mean": float(clean.mean()),
+                    "std": float(clean.std(ddof=0)),
+                    "p75": float(quantiles.loc[0.75]),
+                    "p95": float(quantiles.loc[0.95]),
+                    "max": float(clean.max()),
+                }
         else:
-            summary_lines.append(f"⚠️ Column '{col_name}': Unrecognized data type ({col.dtype}).\n")
+            column["kind"] = "categorical"
+            counts = series.value_counts(dropna=False).head(15)
+            column["most_frequent"] = [
+                {
+                    "value": _json_value(value),
+                    "count": int(count),
+                    "fraction": round(float(count / len(series)), 6),
+                }
+                for value, count in counts.items()
+            ]
+        columns.append(column)
+    numeric = df.select_dtypes(include=[np.number])
+    correlations = []
+    if target in numeric.columns:
+        for name, value in numeric.corr(method="spearman")[target].items():
+            if name != target and pd.notna(value):
+                correlations.append({"column": name, "spearman": round(float(value), 6)})
+        correlations.sort(key=lambda item: abs(item["spearman"]), reverse=True)
+    return {
+        "row_count": int(len(df)),
+        "column_count": int(len(df.columns)),
+        "duplicated_rows": int(df.duplicated().sum()),
+        "target_column": target,
+        "strongest_numeric_correlations_with_target": correlations[:15],
+        "columns": columns,
+    }
 
-    # 3. Análise de Correlação
-    numeric_cols = df.select_dtypes(include=np.number)
-    if numeric_cols.shape[1] > 1:
-        try:
-            corr_matrix = numeric_cols.corr().abs()
-            upper = corr_matrix.where(np.triu(np.ones(corr_matrix.shape), k=1).astype(bool))
-            top_corr = upper.unstack().sort_values(ascending=False).head(10) 
 
-            corr_texts = []
-            for (col1, col2), corr_value in top_corr.items():
-                if not pd.isna(corr_value) and corr_value > 0.5:
-                    corr_texts.append(f"'{col1}' and '{col2}' (Correlation Abs. = {safe_format(corr_value)})")
-            
-            if corr_texts:
-                summary_lines.append("\n Strong correlations found (Top 10, Abs > 0.5) between: " + "; ".join(corr_texts) + ".\n")
-                alerts.append("Strong Correlations Found. Check 'Top 10' for multicollinearity issues.")
-        except Exception:
-            alerts.append("Correlation calculation failed (e.g., constant columns).")
+def describe_dataset_detailed(
+    df: pd.DataFrame,
+    target_column: str,
+    top_candidates: int = 10,
+    selected_test_type: str | None = None,
+) -> str:
+    """Return compact JSON with a dataset profile and ranked subgroup hypotheses.
 
-    # 4. Adicionar Alertas no final
-    if alerts:
-        summary_lines.append("--- 🚨 Quality & Hypothesis ALERTS ---")
-        summary_lines.append("• " + "\n• ".join(alerts))
-        summary_lines.append("---------------------------------------\n")
-        
-    return "\n".join(summary_lines)
+    Candidate subgroups contain one or two categorical predicates. Each subgroup
+    is compared with its complement using a two-sided two-sample Welch t-test.
+    Benjamini-Hochberg correction is applied across every tested candidate.
+    """
+    if target_column not in df.columns:
+        raise ValueError(f"Target column not found: {target_column}")
+    if not pd.api.types.is_numeric_dtype(df[target_column]):
+        raise TypeError(f"Target column must be numeric: {target_column}")
+    if isinstance(top_candidates, bool) or not isinstance(top_candidates, int):
+        raise TypeError("top_candidates must be an integer.")
+    if top_candidates < 1:
+        raise ValueError("top_candidates must be at least 1.")
+
+    min_subgroup_size = 20
+    min_coverage = 0.01
+    max_coverage = 0.90
+    max_categories = 30
+    alpha = 0.05
+
+    data = df.loc[df[target_column].notna()].reset_index(drop=True)
+    if len(data) < 2 * min_subgroup_size:
+        raise ValueError(
+            f"At least {2 * min_subgroup_size} rows with a valid target are required."
+        )
+    target = data[target_column].astype(float).to_numpy()
+    minimum = max(min_subgroup_size, math.ceil(min_coverage * len(data)))
+    maximum = math.floor(max_coverage * len(data))
+
+    features = []
+    excluded_features = []
+    for name in data.columns:
+        if name == target_column:
+            continue
+        series = data[name]
+        unique_count = int(series.nunique(dropna=True))
+        unique_ratio = unique_count / len(data)
+        is_categorical = (
+            pd.api.types.is_bool_dtype(series)
+            or isinstance(series.dtype, pd.CategoricalDtype)
+            or pd.api.types.is_object_dtype(series)
+            or pd.api.types.is_string_dtype(series)
+        )
+        if not is_categorical:
+            excluded_features.append({"column": name, "reason": "numeric"})
+        elif unique_count < 2:
+            excluded_features.append({"column": name, "reason": "constant"})
+        elif unique_count > max_categories or unique_ratio > 0.95:
+            excluded_features.append(
+                {"column": name, "reason": "high_cardinality_or_identifier"}
+            )
+        else:
+            features.append(name)
+
+    masks: dict[tuple[str, Any], np.ndarray] = {}
+    for feature in features:
+        for raw_value in data[feature].dropna().unique():
+            value = _json_value(raw_value)
+            mask = data[feature].eq(raw_value).to_numpy()
+            if minimum <= int(mask.sum()) <= maximum:
+                masks[(feature, value)] = mask
+
+    predicates = list(masks)
+    condition_sets = [(predicate,) for predicate in predicates]
+    condition_sets.extend(
+        (left, right)
+        for left, right in itertools.combinations(predicates, 2)
+        if left[0] != right[0]
+    )
+
+    candidates = []
+    singletons: dict[tuple[str, Any], dict[str, Any]] = {}
+    for conditions in condition_sets:
+        mask = np.logical_and.reduce([masks[condition] for condition in conditions])
+        subgroup_size = int(mask.sum())
+        if not minimum <= subgroup_size <= maximum:
+            continue
+        group = target[mask]
+        complement = target[~mask]
+        test = stats.ttest_ind(
+            group,
+            complement,
+            equal_var=False,
+            alternative="two-sided",
+        )
+        difference = float(np.mean(group) - np.mean(complement))
+        if not np.isfinite(test.statistic) or not np.isfinite(test.pvalue):
+            continue
+        effect_size = _hedges_g(group, complement)
+        if not np.isfinite(effect_size):
+            continue
+        candidate = {
+            "conditions": [
+                {"column": column, "value": value} for column, value in conditions
+            ],
+            "subgroup_size": subgroup_size,
+            "coverage": subgroup_size / len(data),
+            "subgroup_mean": float(np.mean(group)),
+            "complement_mean": float(np.mean(complement)),
+            "mean_difference": difference,
+            "direction": "greater" if difference > 0 else "less",
+            "welch_t_statistic": float(test.statistic),
+            "p_value": float(test.pvalue),
+            "hedges_g": effect_size,
+        }
+        candidates.append(candidate)
+        if len(conditions) == 1:
+            singletons[conditions[0]] = candidate
+
+    q_values = _benjamini_hochberg([candidate["p_value"] for candidate in candidates])
+    for candidate, q_value in zip(candidates, q_values):
+        candidate["q_value_bh"] = q_value
+        candidate["significant"] = q_value <= alpha
+        conditions = [
+            (item["column"], item["value"]) for item in candidate["conditions"]
+        ]
+        parents = [
+            singletons[condition]
+            for condition in conditions
+            if condition in singletons
+        ]
+        strongest_parent = (
+            max(parents, key=lambda parent: abs(parent["hedges_g"]))
+            if len(conditions) > 1 and parents
+            else None
+        )
+        effect_gain = (
+            abs(candidate["hedges_g"]) - abs(strongest_parent["hedges_g"])
+            if strongest_parent
+            else None
+        )
+        candidate["strongest_parent"] = (
+            strongest_parent["conditions"] if strongest_parent else None
+        )
+        candidate["absolute_effect_gain_over_parent"] = effect_gain
+        candidate["priority_score"] = (
+            abs(candidate["hedges_g"])
+            * math.sqrt(candidate["coverage"])
+            * (1.0 + max(0.0, effect_gain or 0.0))
+        )
+
+    candidates.sort(
+        key=lambda candidate: (
+            not candidate["significant"],
+            -candidate["priority_score"],
+            candidate["q_value_bh"],
+        )
+    )
+
+    selected = []
+    for candidate in candidates[:top_candidates]:
+        selected.append(
+            {
+                "conditions": candidate["conditions"],
+                "subgroup_size": candidate["subgroup_size"],
+                "coverage": round(candidate["coverage"], 6),
+                "subgroup_mean": round(candidate["subgroup_mean"], 6),
+                "complement_mean": round(candidate["complement_mean"], 6),
+                "mean_difference": round(candidate["mean_difference"], 6),
+                "direction": candidate["direction"],
+                "welch_t_statistic": round(candidate["welch_t_statistic"], 6),
+                "p_value": candidate["p_value"],
+                "q_value_bh": candidate["q_value_bh"],
+                "hedges_g": round(candidate["hedges_g"], 6),
+                "strongest_parent": candidate["strongest_parent"],
+                "absolute_effect_gain_over_parent": (
+                    round(candidate["absolute_effect_gain_over_parent"], 6)
+                    if candidate["absolute_effect_gain_over_parent"] is not None
+                    else None
+                ),
+            }
+        )
+
+    payload = {
+        "dataset": _compact_profile(data, target_column),
+        "hypothesis_precomputation": {
+            "target": target_column,
+            "requested_test_type": selected_test_type or "auto",
+            "purpose": "descriptive evidence for hypothesis generation; the requested test still governs final evaluation",
+            "comparison": "subgroup versus its complement",
+            "statistical_test": "two-sided two-sample Welch t-test",
+            "multiple_testing_correction": (
+                "Benjamini-Hochberg over all tested candidates"
+            ),
+            "eligible_features": features,
+            "excluded_features": excluded_features,
+            "candidate_counts": {
+                "tested": len(candidates),
+                "significant": sum(
+                    candidate["significant"] for candidate in candidates
+                ),
+                "returned": len(selected),
+            },
+            "top_candidates": selected,
+        },
+    }
+    return json.dumps(
+        payload,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
