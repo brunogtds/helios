@@ -7,6 +7,12 @@ The current version runs as a local application with:
 - The statistical tests: one-sample t-test, Welch's t-test, ANOVA, and Levene's test;
 - LLM support through OpenAI and Groq APIs.
 
+## Video demo
+
+Here is a video demo, where we are running queries on HELIOS:
+
+[![Watch here](https://youtube.com)](https://youtu.be/bP5ZnqEdHEs)
+
 ## Requirements
 
 - Python 3.10 or newer;
