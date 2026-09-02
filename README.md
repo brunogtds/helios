@@ -9,10 +9,9 @@ The current version runs as a local application with:
 
 ## Video demo
 
-Here is a video demo, where we are running queries on HELIOS:
+Here is a video demo where we run queries on HELIOS:
 
-
-<iframe width="560" height="315" src="https://youtu.be/bP5ZnqEdHEs" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
+[![HELIOS Video Demo](https://img.youtube.com/vi/bP5ZnqEdHEs/0.jpg)](https://youtu.be/bP5ZnqEdHEs)
 
 ## Requirements
 
