@@ -66,7 +66,7 @@ docker build -f Dockerfile.eda -t helios-eda-python:1 .
 .venv/bin/python -B -m uvicorn main:app --host 127.0.0.1 --port 8001
 ```
 
-Open [http://127.0.0.1:8001](http://127.0.0.1:8001). The local application's default login is `admin` / `password`.
+Open [http://127.0.0.1:8001/helios.html](http://127.0.0.1:8001/helios.html).
 
 ## Provider configuration
 
