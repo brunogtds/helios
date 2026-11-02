@@ -12,6 +12,7 @@ let currentAnalysisSections = {
 
 let availableLLMProviders = {
     OpenAI: { has_env_key: false, default_model: 'gpt-5.4-mini' },
+    Anthropic: { has_env_key: false, default_model: 'claude-sonnet-5-5' },
     Groq: { has_env_key: false, default_model: 'llama-3.3-70b-versatile' }
 };
 
@@ -194,7 +195,7 @@ function getSelectedAIProvider() {
 
 function getDefaultModelForProvider(provider) {
     return availableLLMProviders?.[provider]?.default_model ||
-        (provider === 'OpenAI' ? 'gpt-5.4-mini' : 'llama-3.3-70b-versatile');
+        ({ OpenAI: 'gpt-5.4-mini', Anthropic: 'claude-sonnet-5-5', Groq: 'llama-3.3-70b-versatile' }[provider] || '');
 }
 
 function getAIProviderInputs() {
@@ -262,10 +263,13 @@ function updateAIProviderUIState() {
         maxRepairContainer.style.display = 'none';
     }
 
-    if (modelInput && (!modelInput.value || modelInput.dataset.autofilled !== 'false')) {
+    const providerChanged = modelInput?.dataset.provider && modelInput.dataset.provider !== provider;
+    if (providerChanged && apiKeyInput) apiKeyInput.value = '';
+    if (modelInput && (providerChanged || !modelInput.value || modelInput.dataset.autofilled !== 'false')) {
         modelInput.value = getDefaultModelForProvider(provider);
         modelInput.dataset.autofilled = 'true';
     }
+    if (modelInput) modelInput.dataset.provider = provider;
 
     if (apiKeyInput) {
         if (hasEnvKey) {
@@ -288,12 +292,13 @@ function updateAIProviderUIState() {
         statusEl.textContent = hasEnvKey
             ? `${provider} is ready. API key found in environment.`
             : `${provider} has no key in environment. Paste an API key to use it.`;
+        if (provider === 'Anthropic') statusEl.textContent += ' Claude uses the provider default temperature.';
     }
 }
 
 async function loadLLMProvidersFromBackend() {
     try {
-        const response = await fetch('http://localhost:8000/available_llm_providers');
+        const response = await fetch('/available_llm_providers');
         if (!response.ok) {
             throw new Error(`Failed to load providers: ${response.status}`);
         }
@@ -870,7 +875,7 @@ async function fetchAIResponse() {
     chatBox.scrollTop = chatBox.scrollHeight;
 
     try {
-        const response = await fetch('http://localhost:8000/chat_with_ai', {
+        const response = await fetch('/chat_with_ai', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({

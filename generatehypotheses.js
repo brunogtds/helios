@@ -169,14 +169,6 @@ function initializeHypothesisPanel(isHypothesisReady, isComparisonSelected) {
                             aria-selected="true">
                             <i class="fas fa-robot mr-2"></i>Hypothesis Generation Via AI Agents
                         </button>
-                        <button 
-                            id="tab-heuristic" 
-                            class="hypothesis-method-tab whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm text-gray-500 hover:text-gray-700 hover:border-gray-300 border-transparent" 
-                            data-tab="heuristic"
-                            role="tab"
-                            aria-selected="false">
-                            <i class="fas fa-brain mr-2"></i>Hypothesis Generation Via Heuristic Algorithms
-                        </button>
                     </div>
                 </nav>
                 
@@ -184,9 +176,6 @@ function initializeHypothesisPanel(isHypothesisReady, isComparisonSelected) {
                     ${renderAIAgentsTab()}
                 </div>
 
-                <div id="tab-content-heuristic" class="hypothesis-tab-content hidden">
-                    ${renderHeuristicAlgorithmsTab(isHypothesisReady, isComparisonSelected)}
-                </div>
                 
                 <div class="flex justify-end items-center space-x-4 mt-6 bg-gray-50 p-4 rounded-lg">
                     <button id="generate-hypotheses-btn" class="font-bold py-2 px-4 rounded-lg transition duration-300 flex items-center bg-gray-300 text-gray-500 cursor-not-allowed" disabled>
@@ -376,7 +365,7 @@ function renderAIAgentsTab() {
                 <div>
                     <h3 class="text-2xl font-bold text-gray-800">Autonomous AI Exploration</h3>
                     <p class="text-gray-600 text-sm">
-                        Tell the AI agent what kind of insights you are looking for. It will autonomously analyze the data and generate hypotheses based on your goal.
+                        Describe your goal to generate hypotheses. Optionally enable the EDA agent to explore the dataset using your intent before hypothesis generation.
                     </p>
                 </div>
             </div>
@@ -388,6 +377,7 @@ function renderAIAgentsTab() {
                 <textarea id="ai-agent-prompt" rows="3" 
                     class="w-full p-3 border border-gray-300 rounded-md focus:ring-purple-500 focus:border-purple-500" 
                     placeholder="Example: 'I want to understand what combinations of factors lead to a higher than average body mass.'"></textarea>
+
                 
                 <div class="mt-4 grid grid-cols-1 md:grid-cols-3 gap-4 text-sm bg-gray-50 p-4 rounded-lg border border-gray-200">
                     
@@ -400,6 +390,10 @@ function renderAIAgentsTab() {
                         <label class="inline-flex items-center cursor-pointer">
                             <input type="radio" name="ai-provider" value="Groq" class="form-radio text-purple-600 focus:ring-purple-500 h-4 w-4">
                             <span class="ml-2">Groq</span>
+                        </label>
+                        <label class="inline-flex items-center cursor-pointer">
+                            <input type="radio" name="ai-provider" value="Anthropic" class="form-radio text-purple-600 focus:ring-purple-500 h-4 w-4">
+                            <span class="ml-2">Claude (Anthropic)</span>
                         </label>
                     </div>
 
@@ -451,10 +445,14 @@ function renderAIAgentsTab() {
                     </div>
                 </div>
 
-                <div class="mt-6 flex items-center bg-purple-100 p-3 rounded-md">
-                    <input type="checkbox" id="ai-agent-checkbox" data-method="ai_agent" class="hypothesis-method-checkbox h-5 w-5 rounded border-gray-300 text-purple-600 focus:ring-purple-500 cursor-pointer">
-                    <label for="ai-agent-checkbox" class="ml-3 block text-md font-bold text-purple-900 cursor-pointer">
-                        Enable AI Agent Generation
+                <div class="mt-6 flex flex-col lg:flex-row lg:items-center gap-4 lg:gap-8 bg-purple-100 p-3 rounded-md">
+                    <label for="ai-agent-checkbox" class="flex items-center gap-3 text-md font-bold text-purple-900 cursor-pointer">
+                        <input type="checkbox" id="ai-agent-checkbox" data-method="ai_agent" class="hypothesis-method-checkbox h-5 w-5 flex-shrink-0 rounded border-gray-300 text-purple-600 focus:ring-purple-500 cursor-pointer">
+                        <span>Enable AI Agent Generation</span>
+                    </label>
+                    <label for="eda-agent-enabled" class="flex items-center gap-3 text-md font-bold text-purple-900 cursor-pointer">
+                        <input id="eda-agent-enabled" type="checkbox" checked disabled class="h-5 w-5 flex-shrink-0 rounded border-gray-300 text-purple-600 focus:ring-purple-500 cursor-pointer">
+                        <span>Use EDA agent to explore the dataset before generating hypotheses</span>
                     </label>
                 </div>
             </div>
@@ -479,6 +477,10 @@ function applyLocalProviderUIState() {
         if (statusEl && !statusEl.textContent.trim()) {
             statusEl.textContent = 'OpenAI selected.';
         }
+    } else if (provider === 'Anthropic') {
+        modelInput.value = 'claude-sonnet-5-5';
+        keyInput.placeholder = 'Paste your Anthropic API key';
+        if (statusEl) statusEl.textContent = 'Claude selected. Provider default temperature is used.';
     } else {
         modelInput.value = 'llama-3.3-70b-versatile';
         keyInput.placeholder = 'Paste your Groq API key';
@@ -614,9 +616,10 @@ function attachEventListeners(isHypothesisReady) {
                     const modelInput = document.getElementById('ai-agent-model');
 
                     selectedMethods[method].prompt = agentPrompt;
+                    selectedMethods[method].eda_enabled = true;
                     selectedMethods[method].provider = selectedProvider;
                     selectedMethods[method].api_key = apiKeyInput?.disabled ? '' : (apiKeyInput?.value.trim() || '');
-                    selectedMethods[method].model_name = modelInput?.value.trim() || (selectedProvider === 'OpenAI' ? 'gpt-5.4-mini' : 'llama-3.3-70b-versatile');
+                    selectedMethods[method].model_name = modelInput?.value.trim() || ({ OpenAI: 'gpt-5.4-mini', Anthropic: 'claude-sonnet-5-5', Groq: 'llama-3.3-70b-versatile' }[selectedProvider] || '');
                     selectedMethods[method].temperature = parseFloat(document.getElementById('ai-agent-temperature').value) || 0.2;
                     selectedMethods[method].total_iterations = parseInt(document.getElementById('ai-agent-iterations').value, 10) || 2;
                     selectedMethods[method].min_hypotheses_per_run = parseInt(document.getElementById('ai-agent-min-hyp').value, 10) || 3;

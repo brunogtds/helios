@@ -27,7 +27,6 @@ let currentSortState = {
 const tableHeaders = [
     { key: 'Select', label: 'Select', sortable: false },
     { key: 'Hypothesis_Text', label: 'Hypothesis', sortable: false },
-    { key: 'Test_Type', label: 'Statistical Test', sortable: true },
     { key: 'Fitness_Score', label: 'Score', sortable: true },
     { key: 'Significance_qValue', label: 'q-Value', sortable: true },
     { key: 'Impact_Lift', label: 'Impact', sortable: true },
@@ -692,22 +691,12 @@ function renderSunburstCharts(hypotheses) {
 
     container.innerHTML = `
         <div class="p-4 border rounded-lg bg-white flex flex-col items-center" style="height: 700px; overflow: auto;">
-            <h4 class="text-md font-semibold text-gray-800 mb-2">Top 10 Hypotheses by Category (by Score)</h4>
-            <div id="sunburst-top10" style="height: 600px; width: 600px;"></div>
-            <hr class="my-8 w-4/5">
             <h4 class="text-md font-semibold text-gray-800 mb-2">All Hypotheses</h4>
             <div id="sunburst-all" style="height: 600px; width: 600px;"></div>
         </div>
     `;
 
-    const top10Hypotheses = [
-        ...(categorizedHypotheses['greater than'] || []).slice(0, 10),
-        ...(categorizedHypotheses['less than'] || []).slice(0, 10),
-        ...(categorizedHypotheses['variance is higher'] || []).slice(0, 10)
-    ];
-
     const allData = buildSunburstData(hypotheses);
-    const top10Data = buildSunburstData(top10Hypotheses);
 
     const layout = {
         width: 600,
@@ -731,22 +720,9 @@ function renderSunburstCharts(hypotheses) {
             branchvalues: 'total'
         }], layout);
 
-        Plotly.newPlot('sunburst-top10', [{
-            type: "sunburst",
-            ids: top10Data.ids,
-            labels: top10Data.labels,
-            parents: top10Data.parents,
-            values: top10Data.values,
-            customdata: top10Data.customdata,
-            hovertemplate: hovertemplate,
-            leaf: { opacity: 0.6 },
-            marker: { line: { width: 1.5 } },
-            branchvalues: 'total'
-        }], layout);
     } else {
         console.error("Plotly.js library not found.");
         document.getElementById('sunburst-all').innerHTML = '<div class="error-message">Plotly.js library not found.</div>';
-        document.getElementById('sunburst-top10').innerHTML = '<div class="error-message">Plotly.js library not found.</div>';
     }
 }
 
@@ -754,6 +730,77 @@ function renderSunburstCharts(hypotheses) {
  * Renders sortable and expandable tables for each category of hypotheses.
  * This function preserves the scroll position and checkbox states across re-renders.
  */
+
+function renderGenerationContext(rawContext) {
+    const escape = value => String(value ?? '').replace(/[&<>"']/g, char => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    })[char]);
+    let context;
+    try { context = typeof rawContext === 'string' ? JSON.parse(rawContext) : rawContext; }
+    catch { context = null; }
+    const eda = context?.eda_agent;
+    const json = value => `<pre class="mt-3 text-xs bg-gray-50 p-4 rounded-lg whitespace-pre-wrap break-words max-h-96 overflow-auto">${escape(JSON.stringify(value, null, 2))}</pre>`;
+    const narrative = value => `<p class="text-sm text-gray-800 whitespace-pre-wrap break-words leading-relaxed">${escape(value)}</p>`;
+    const evidence = Array.isArray(eda?.evidence) ? eda.evidence : [];
+    const actions = evidence.map((item, index) => {
+        const operation = item.query?.operation || 'query';
+        const label = operation === 'python' ? 'Python code' : operation === 'sql' ? 'SQL query' : operation.replace(/_/g, ' ');
+        const code = operation === 'python' && typeof item.query?.code === 'string'
+            ? `<ul class="list-disc pl-5 mt-3"><li><p class="text-sm font-semibold text-gray-700">Code</p>
+                <div class="mt-2 rounded-lg overflow-hidden border border-gray-700"><div class="bg-gray-800 px-4 py-2 text-xs font-medium text-gray-300">Python</div>
+                <pre class="bg-gray-900 text-gray-100 p-4 overflow-auto max-h-96 text-sm leading-relaxed" style="white-space:pre;tab-size:4;font-family:Consolas,'Courier New',monospace"><code class="language-python">${escape(item.query.code)}</code></pre></div>
+              </li></ul>` : '';
+        return `<li class="border-l-2 border-sky-200 pl-4 py-2">
+            <p class="font-medium text-sm text-gray-800">${escape(`Step ${index + 1}: ${label}`)}${item.result?.error ? ' — execution returned an error' : ''}</p>
+            ${code}
+            <details class="mt-2"><summary class="cursor-pointer text-sm text-sky-700">View executed request and result</summary>${json(item)}</details>
+        </li>`;
+    }).join('');
+    const report = eda ? `${narrative(eda.execution_report || eda.summary || 'No execution report was returned.')}
+        ${eda.summary && eda.execution_report && eda.summary !== eda.execution_report ? `<p class="mt-4 text-sm font-semibold text-gray-700">Findings</p>${narrative(eda.summary)}` : ''}
+        ${actions ? `<p class="mt-5 text-sm font-semibold text-gray-700">Recorded actions, in execution order</p><ol class="mt-3 space-y-3">${actions}</ol>` : ''}
+        ${Array.isArray(eda.limitations) && eda.limitations.length ? `<p class="mt-5 text-sm font-semibold text-gray-700">Limitations</p>${narrative(eda.limitations.join('\n'))}` : ''}`
+        : '<p class="text-sm text-gray-500">No EDA report was returned for this run.</p>';
+    return `<div class="py-6 space-y-6">
+        <section class="rounded-xl border border-gray-200 bg-white p-6 shadow-sm" aria-labelledby="eda-report-title">
+            <h3 id="eda-report-title" class="text-xl font-semibold text-gray-900">Agent Report</h3>
+            <p class="text-sm text-gray-500 mt-2 mb-5">What the EDA agent executed and found, based on recorded queries and results.</p>
+            ${report}
+        </section>
+        <section class="rounded-xl border border-gray-200 bg-white p-6 shadow-sm" aria-labelledby="eda-output-title">
+            <h3 id="eda-output-title" class="text-xl font-semibold text-gray-900">Agent Output</h3>
+            <p class="text-sm text-gray-500 mt-2">Exact context returned by the EDA agent and sent to the hypothesis generator as data_context.</p>
+            ${eda ? json(context) : '<p class="mt-4 text-sm text-gray-500">No EDA output was returned for this run.</p>'}
+        </section>
+    </div>`;
+}
+
+function formatHypothesisBullets(hyp) {
+    const escape = value => String(value ?? '').replace(/[&<>"']/g, char => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    })[char]);
+    const conditions = hyp.Conditions || {};
+    const dimension = hyp.Dimension;
+    if (!dimension || !Object.keys(conditions).length) return escape(hyp.Hypothesis_Text || '');
+
+    const variance = String(hyp.Operator || '').includes('variance');
+    const measure = variance ? 'variance' : 'mean';
+    const operator = variance ? 'greater than' : (hyp.Operator || 'different from');
+    const scope = hyp.Comparison_Scope || 'group_vs_global';
+    let reference = 'the dataset';
+    if (scope === 'group_vs_rest') reference = 'the rest of the dataset';
+    if (scope === 'group_vs_group') {
+        const details = Object.entries(hyp.Reference_Conditions || {})
+            .map(([column, value]) => `${escape(column)}: ${escape(value)}`).join('; ');
+        reference = `the reference group${details ? ` (${details})` : ''}`;
+    }
+    return `<ul class="list-disc pl-5 space-y-1">
+        <li><strong>Group</strong><ul class="list-disc pl-5 mt-1">${Object.entries(conditions)
+            .map(([column, value]) => `<li>${escape(column)}: ${escape(value)}</li>`).join('')}</ul></li>
+        <li><strong>Measure:</strong> ${variance ? 'Variance' : 'Mean'} of ${escape(dimension)}</li>
+        <li><strong>Comparison:</strong> ${escape(operator)} the ${measure} of <em>${escape(dimension)}</em> in ${reference}</li>
+    </ul>`;
+}
 
 function drawHypothesisTables() {
     const container = document.getElementById('hypothesis-tables-container');
@@ -852,10 +899,7 @@ function drawHypothesisTables() {
                                             />
                                         </td>
                                         <td class="px-4 py-3 border-t border-gray-200 text-sm text-gray-800">
-                                            ${hyp.Hypothesis_Text || ''}
-                                        </td>
-                                        <td class="px-4 py-3 border-t border-gray-200 text-sm text-gray-700">
-                                            ${formatTestType(hyp.Test_Type)}
+                                            ${formatHypothesisBullets(hyp)}
                                         </td>
                                         <td class="px-4 py-3 border-t border-gray-200 text-sm text-gray-700">
                                             ${formatScore(hyp.Fitness_Score)}

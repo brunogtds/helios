@@ -119,15 +119,15 @@
 
     <!-- ORDEM CORRETA: Primeiro os utilitários e ferramentas -->
     <script src="tsne.js" defer></script>
-    <script src="visualizationtools.js" defer></script>
-    <script src="ai_utilities.js" defer></script>
+    <script src="visualizationtools.js?v=eda-code-sunburst-5" defer></script>
+    <script src="ai_utilities.js?v=claude-evaluator-20261023" defer></script>
     
     <!-- CRÍTICO: Carregar CORE antes de UI -->
     <script src="helios_core.js" defer></script>
-    <script src="helios_ui.js" defer></script>
+    <script src="helios_ui.js?v=ranking-score-10-20261028-txt-en" defer></script>
     
     <!-- Por último, o gerador de hipóteses que depende dos anteriores -->
-    <script src="generatehypotheses.js" defer></script>
+    <script src="generatehypotheses.js?v=claude-evaluator-20261023" defer></script>
     
 </body>
 </html>

@@ -586,6 +586,11 @@ def format_results_table(df, all_condition_attributes):
         'Fitness_Score', 'Significance_qValue', 'Impact_Lift', 'Coverage', 'Diversity', 'Homogeneity',
         'is_significant', 'Dimension', 'Aggregation', 'Operator', 'Test_Type', 'source_method'
     ] + base_attribute_names + ['Hypothesis_Text']
+    # Keep structured group definitions for the Table View renderer.
+    final_columns_order += [
+        column for column in ('Conditions', 'Reference_Conditions', 'Comparison_Scope')
+        if column in formatted_df.columns and column not in final_columns_order
+    ]
     
     for col in final_columns_order:
         if col not in formatted_df.columns:
@@ -897,9 +902,25 @@ def describe_dataset_detailed(
     alpha = 0.05
 
     data = df.loc[df[target_column].notna()].reset_index(drop=True)
+    if data.empty:
+        raise ValueError("At least one row with a valid target is required.")
     if len(data) < 2 * min_subgroup_size:
-        raise ValueError(
-            f"At least {2 * min_subgroup_size} rows with a valid target are required."
+        return json.dumps(
+            {
+                "dataset": _compact_profile(data, target_column),
+                "hypothesis_precomputation": {
+                    "target": target_column,
+                    "requested_test_type": selected_test_type or "auto",
+                    "status": "skipped",
+                    "reason": "Too few valid target rows for preliminary subgroup comparisons; generate hypotheses from the descriptive profile instead.",
+                    "minimum_rows": 2 * min_subgroup_size,
+                    "candidate_counts": {"tested": 0, "significant": 0, "returned": 0},
+                    "top_candidates": [],
+                },
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+            allow_nan=False,
         )
     target = data[target_column].astype(float).to_numpy()
     minimum = max(min_subgroup_size, math.ceil(min_coverage * len(data)))

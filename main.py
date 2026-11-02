@@ -22,6 +22,9 @@ from langchain_core.messages import HumanMessage, AIMessage
 
 # Import helper functions from utils.py
 import utils
+from eda_agent import run_eda_agent
+from ranking_agent import rank_hypotheses
+from llm_support import build_claude, message_text, CLAUDE_DEFAULT_MODEL
 
 import uuid
 from threading import Thread
@@ -117,7 +120,7 @@ def update_ai_progress(job_id, **kwargs):
 # HELPER FUNCTIONS
 # =====================================================================
 
-def build_llm(provider: str, model_name: str, temperature: float, api_key: str):
+def build_llm(provider: str, model_name: str, temperature: float, api_key: str, **options):
     def resolve_key(env_var_name: str, provided_key: str):
         # Prioridade 1: key digitada na UI
         if provided_key and provided_key.strip():
@@ -130,6 +133,9 @@ def build_llm(provider: str, model_name: str, temperature: float, api_key: str):
 
         return None, None
 
+    if provider in ("Anthropic", "Claude"):
+        return build_claude(model_name, api_key, **options)
+
     if provider == "OpenAI":
         key, source = resolve_key("OPENAI_API_KEY", api_key)
         if not key:
@@ -141,7 +147,8 @@ def build_llm(provider: str, model_name: str, temperature: float, api_key: str):
         return ChatOpenAI(
             model=model_name,
             temperature=temperature,
-            api_key=key
+            api_key=key,
+            **options
         )
 
     if provider == "Groq":
@@ -155,7 +162,8 @@ def build_llm(provider: str, model_name: str, temperature: float, api_key: str):
         return ChatGroq(
             model_name=model_name,
             temperature=temperature,
-            api_key=key
+            api_key=key,
+            **options
         )
 
     raise ValueError(f"Unknown provider: {provider}")
@@ -353,16 +361,30 @@ def resolve_selected_test_type(params, user_prompt=""):
     return matches[0] if len(set(matches)) == 1 else None
 
 
-def build_data_context(full_df, selected_dimension, selected_test_type=None):
-    """Create the exact target-aware context sent to the agents."""
-    context_df = full_df.copy()
-    context_df[selected_dimension] = pd.to_numeric(context_df[selected_dimension], errors="coerce")
-    context_df = context_df.dropna(subset=[selected_dimension]).reset_index(drop=True)
-    return utils.describe_dataset_detailed(
-        context_df,
-        target_column=selected_dimension,
-        selected_test_type=selected_test_type,
-    )
+def build_data_context(full_df, selected_dimension, selected_test_type=None, params=None, job_id=None):
+    """Replace describe_dataset with an EDA agent; preserve downstream algorithms."""
+    params = params or {}
+    data = full_df.copy()
+    for column in data.columns:
+        numeric = pd.to_numeric(data[column], errors='coerce')
+        if numeric.notna().sum() and numeric.notna().sum() == data[column].notna().sum():
+            data[column] = numeric
+    data[selected_dimension] = pd.to_numeric(data[selected_dimension], errors='coerce')
+    if job_id:
+        update_ai_progress(job_id, phase='eda', eda_status='running', message='EDA agent: preparing dataset summary...')
+    llm = build_llm(params.get('provider', 'OpenAI'), params.get('model_name', 'gpt-5.4-mini'),
+        float(params.get('temperature', 0.2)), params.get('api_key', ''), timeout=None, max_retries=2)
+    context = run_eda_agent(data, selected_dimension, '{}', llm,
+        user_intent=params.get('prompt', ''), selected_test_type=selected_test_type,
+        on_progress=(lambda message: update_ai_progress(job_id, message=message)) if job_id else None)
+    if job_id:
+        update_ai_progress(job_id, eda_status='completed', data_context=context,
+                           message='Dataset summary ready. Preparing hypotheses...')
+    return context
+
+
+def build_eda_context(full_df, selected_dimension, params, selected_test_type=None, job_id=None):
+    return build_data_context(full_df, selected_dimension, selected_test_type, params, job_id)
 
 
 def enforce_selected_test_type(hypotheses, selected_test_type):
@@ -532,7 +554,14 @@ A **subgroup** is a subset of dataset rows defined by one or more **equality con
 You **do not compute statistics or p-values**. Your role is only to propose candidate
 hypotheses that define meaningful subgroups for later statistical testing.
 
-If there is a user intention, guide your hypotheses toward solving it.
+Guide your hypotheses toward solving it the USER INTENT. Even if a candidate hypothesis has a lower q_value, If it doesn't involve a column related to user intent, don't prioritize it.
+
+For example, if the User intent in a Movies dataset is:
+USER INTENT: “I want to understand more about a pattern of Action and Drama movies”
+Hypothesis MUST include one of these attributes (Action or Drama movies).
+USER INTENT:
+“I want to investigate patterns related to penguins from Biscoe Island.”
+Hypothesis MUST include this attribute (Biscoe Island).
 
 ---
 
@@ -545,7 +574,6 @@ Rules:
 - Use **only information explicitly present** in DATA CONTEXT.
 - **Do not estimate** correlations, significance, or effect sizes.
 - Do not invent statistics.
-- Guide your hypotheses toward the user intention if provided.
 - The plural of hypothesis is hypotheses. Do **not** use hypothesises.
 
 ---
@@ -666,7 +694,7 @@ Generate exactly **{min_hypotheses} hypotheses** not present in memory.
 """
 
 
-def generate_statistical_advice(full_df, selected_dimension, params, job_id=None):
+def generate_statistical_advice(full_df, selected_dimension, params, job_id=None, data_context=None):
     user_prompt = params.get('prompt', '')
     provider = params.get('provider', 'OpenAI')
     api_key = params.get('api_key', '')
@@ -676,7 +704,8 @@ def generate_statistical_advice(full_df, selected_dimension, params, job_id=None
 
     try:
         llm = build_llm(provider, model_name, temperature, api_key)
-        data_context = build_data_context(full_df, selected_dimension, selected_test_type)
+        if data_context is None:
+            data_context = build_eda_context(full_df, selected_dimension, params, selected_test_type, job_id)
         if selected_test_type:
             user_prompt = (
                 f"{user_prompt}\n\nThe user explicitly restricted this run to "
@@ -702,8 +731,8 @@ def generate_statistical_advice(full_df, selected_dimension, params, job_id=None
             "target_dimension": selected_dimension,
             "data_context": data_context
         }):
-            if chunk.content:
-                response_chunks.append(chunk.content)
+            if message_text(chunk):
+                response_chunks.append(message_text(chunk))
 
                 if job_id:
                     update_ai_progress(
@@ -734,7 +763,7 @@ def generate_statistical_advice(full_df, selected_dimension, params, job_id=None
         return error_text
 
 
-def discover_with_ai_agent(full_df, discretized_df, original_df, selected_dimension, global_mean, params, job_id=None):
+def discover_with_ai_agent(full_df, discretized_df, original_df, selected_dimension, global_mean, params, job_id=None, data_context=None):
     print("\n" + "=" * 50)
     print("STARTING FIDELITY AI AGENT (WITH MEMORY & REPAIR LOOP)")
     print("=" * 50)
@@ -779,7 +808,8 @@ def discover_with_ai_agent(full_df, discretized_df, original_df, selected_dimens
         debug_logs["error"] = str(e)
         return pd.DataFrame(), debug_logs
 
-    data_context = build_data_context(full_df, selected_dimension, selected_test_type)
+    if data_context is None:
+        data_context = build_eda_context(full_df, selected_dimension, params, selected_test_type, job_id)
     if selected_test_type:
         user_prompt = (
             f"{user_prompt}\n\nSTRICT STATISTICAL TEST RESTRICTION: Generate hypotheses only for "
@@ -818,9 +848,9 @@ def discover_with_ai_agent(full_df, discretized_df, original_df, selected_dimens
                     "min_hypotheses": min_hypotheses_per_run,
                     "target_dimension": selected_dimension
                 }):
-                    if chunk.content:
-                        print(chunk.content, end="", flush=True)
-                        response_chunks.append(chunk.content)
+                    if message_text(chunk):
+                        print(message_text(chunk), end="", flush=True)
+                        response_chunks.append(message_text(chunk))
 
                         if job_id:
                             current_raw = "".join(response_chunks)
@@ -908,6 +938,22 @@ def discover_with_ai_agent(full_df, discretized_df, original_df, selected_dimens
 
     print(f"\n=> Finished {total_iterations} runs. Total unique hypotheses generated: {len(memory)}")
 
+    debug_logs["generated_hypotheses"] = list(memory)
+    if job_id:
+        update_ai_progress(job_id, phase="ranking", ranking_status="running",
+                           message="Ranking Agent: scoring and ranking hypotheses against the User Query...")
+    try:
+        memory, evaluation = rank_hypotheses(
+            llm, params.get('prompt', ''), selected_dimension, memory)
+    except Exception as exc:
+        if job_id:
+            update_ai_progress(job_id, ranking_status="error")
+        raise RuntimeError(f"Ranking Agent failed; relevance filtering was not completed: {exc}") from exc
+    debug_logs["ranking"] = evaluation
+    if job_id:
+        update_ai_progress(job_id, ranking_status=evaluation['status'], ranking=evaluation,
+                           live_hypotheses=memory)
+
     formatted_hyps = []
     for h in memory:
         agg = str(h.get("aggregation", "mean")).lower()
@@ -944,7 +990,7 @@ def discover_with_ai_agent(full_df, discretized_df, original_df, selected_dimens
     df_hyps = pd.DataFrame(formatted_hyps)
     if df_hyps.empty:
         print("=> No valid hypotheses generated after all runs.")
-        debug_logs["error"] = "No valid hypotheses returned."
+        debug_logs["error"] = "No hypotheses passed relevance and condition validation."
         return pd.DataFrame(), debug_logs
 
     def format_ai_hypothesis_text(row):
@@ -1489,6 +1535,10 @@ def available_llm_providers():
             "has_env_key": bool(os.getenv("OPENAI_API_KEY", "").strip()),
             "default_model": "gpt-5.4-mini"
         },
+        "Anthropic": {
+            "has_env_key": bool(os.getenv("ANTHROPIC_API_KEY", "").strip()),
+            "default_model": CLAUDE_DEFAULT_MODEL
+        },
         "Groq": {
             "has_env_key": bool(os.getenv("GROQ_API_KEY", "").strip()),
             "default_model": "llama-3.3-70b-versatile"
@@ -1773,7 +1823,7 @@ def chat_with_ai(payload: ChatPayload):
                 messages.append(AIMessage(content=text))
 
         response = llm.invoke(messages)
-        return {"text": response.content}
+        return {"text": message_text(response)}
 
     except Exception as e:
         print(f"An error occurred during AI chat: {e}")
@@ -1803,7 +1853,8 @@ def generate_ai_async(payload: TablePayload):
                 ]
             df.columns = cols
 
-            df = df.replace('', np.nan).dropna()
+            eda_df = df.replace('', np.nan).copy()
+            df = eda_df.dropna()
             df.reset_index(drop=True, inplace=True)
 
             selected_dimension = df.columns[payload.target_column_index]
@@ -1816,7 +1867,7 @@ def generate_ai_async(payload: TablePayload):
             global_mean = original_df[selected_dimension].mean()
 
             selected_test_type = resolve_selected_test_type(params, params.get('prompt', ''))
-            data_context = build_data_context(df, selected_dimension, selected_test_type)
+            data_context = build_eda_context(eda_df, selected_dimension, params, selected_test_type, job_id)
             update_ai_progress(
                 job_id,
                 data_context=data_context,
@@ -1827,17 +1878,13 @@ def generate_ai_async(payload: TablePayload):
                 df,
                 selected_dimension,
                 params,
-                job_id=job_id
+                job_id=job_id,
+                data_context=data_context
             )
 
             result_df, ai_logs = discover_with_ai_agent(
-                df,
-                discretized_df,
-                original_df,
-                selected_dimension,
-                global_mean,
-                params,
-                job_id=job_id
+                df, discretized_df, original_df, selected_dimension, global_mean,
+                params, job_id=job_id, data_context=data_context
             )
 
             if not result_df.empty:
@@ -1870,6 +1917,7 @@ def generate_ai_async(payload: TablePayload):
                     "selected_dimension": selected_dimension,
                     "global_mean": global_mean,
                     "statistical_advice": advisor_text,
+                    "ranking": ai_logs.get("ranking"),
                     "selected_test_type": selected_test_type,
                     "data_context": data_context
                 },
@@ -2010,8 +2058,8 @@ async def generate_statistical_advice_stream(payload: TablePayload):
             full_text = ""
 
             for chunk in llm.stream(prompt):
-                if chunk.content:
-                    full_text += chunk.content
+                if message_text(chunk):
+                    full_text += message_text(chunk)
 
             # força 1 parágrafo curto mesmo se o modelo exceder
             compact = " ".join(full_text.split())
@@ -2029,3 +2077,22 @@ async def generate_statistical_advice_stream(payload: TablePayload):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=False)
+
+
+# Serve the unchanged HELIOS interface alongside the API on its independent port.
+from pathlib import Path
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+FRONTEND_ROOT = Path(__file__).resolve().parent
+app.mount('/helios_files', StaticFiles(directory=FRONTEND_ROOT / 'helios_files'), name='helios_files')
+@app.get('/')
+def frontend_home():
+    return FileResponse(FRONTEND_ROOT / 'index.html')
+@app.get('/{filename}')
+def frontend_asset(filename: str):
+    allowed = {'index.html', 'helios.html', 'helios_core.js', 'helios_ui.js', 'generatehypotheses.js',
+               'ai_utilities.js', 'tsne.js', 'visualizationtools.js', 'image.png', 'image1.png',
+               'image2.png', 'image3.png', 'imageindex.jpg'}
+    if filename not in allowed:
+        raise HTTPException(404, 'Not found')
+    return FileResponse(FRONTEND_ROOT / filename)

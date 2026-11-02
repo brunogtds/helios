@@ -1,3 +1,68 @@
+function renderRankingReport(panel, report) {
+    panel.replaceChildren();
+    const addText = (parent, tag, value, className = '') => {
+        const node = document.createElement(tag);
+        node.textContent = String(value ?? '');
+        node.className = className;
+        parent.appendChild(node);
+        return node;
+    };
+    addText(panel, 'h3', 'Ranking Agent', 'text-xl font-semibold mt-6 mb-3');
+    if (!report) {
+        addText(panel, 'p', 'No Ranking Agent report is available for this run.');
+        return;
+    }
+    if (report.status === 'skipped') {
+        addText(panel, 'p', report.reason || 'Ranking was skipped.');
+        return;
+    }
+    addText(panel, 'p', report.summary, 'mb-3');
+    addText(panel, 'p', `${report.accepted_count ?? 0} accepted, ${report.rejected_count ?? 0} rejected. Scores measure relevance to the User Query (0–10), not statistical evidence.`, 'text-sm text-gray-600 mb-4');
+    if (report.unanswered_aspects?.length) {
+        addText(panel, 'h4', 'Unanswered aspects', 'font-semibold');
+        const list = document.createElement('ul');
+        list.className = 'list-disc pl-5 mb-4';
+        report.unanswered_aspects.forEach(item => addText(list, 'li', item));
+        panel.appendChild(list);
+    }
+    const wrapper = document.createElement('div');
+    wrapper.className = 'overflow-x-auto border rounded-lg';
+    const table = document.createElement('table');
+    table.className = 'min-w-full bg-white text-sm';
+    const header = document.createElement('thead');
+    const headerRow = document.createElement('tr');
+    ['Rank', 'Relevance score', 'Hypothesis', 'Decision', 'Reason'].forEach(label =>
+        addText(headerRow, 'th', label, 'px-4 py-3 text-left bg-gray-100'));
+    header.appendChild(headerRow);
+    table.appendChild(header);
+    const body = document.createElement('tbody');
+    const ranked = [...(report.ranked_hypotheses || [])].sort((a, b) => a.rank - b.rank);
+    ranked.forEach(item => {
+        const row = document.createElement('tr');
+        const cell = value => addText(row, 'td', value, 'px-4 py-3 border-t align-top');
+        cell(item.rank);
+        cell(`${item.score} / 10`);
+        const h = item.hypothesis || {};
+        const conditions = list => (list || []).map(c => `${c.column} ${c.op || '=='} ${JSON.stringify(c.value)}`).join(' AND ');
+        const group = conditions(h.conditions) || 'the entire dataset';
+        const reference = h.comparison_scope === 'group_vs_group'
+            ? conditions(h.reference_conditions) || 'the reference group'
+            : h.comparison_scope === 'group_vs_global' ? 'the global dataset' : 'the rest of the dataset';
+        cell(h.Hypothesis_Text || `For ${group}, ${h.aggregation || 'mean'} of ${h.target_metric || 'target'} ${h.comparison || ''} ${reference}.`);
+        cell(item.accepted ? 'Accepted' : 'Rejected');
+        cell(item.reason);
+        body.appendChild(row);
+    });
+    table.appendChild(body);
+    wrapper.appendChild(table);
+    panel.appendChild(wrapper);
+    const details = document.createElement('details');
+    details.className = 'mt-4';
+    addText(details, 'summary', 'Full Ranking Agent report');
+    addText(details, 'pre', JSON.stringify(report, null, 2), 'whitespace-pre-wrap');
+    panel.appendChild(details);
+}
+
 /**
  * @file helios_ui.js - User interface rendering and interaction logic for HELIOS 2.0
  * Handles DOM manipulation, event listeners, visualizations, and hypothesis generation.
@@ -128,6 +193,47 @@ document.addEventListener('DOMContentLoaded', () => {
         };
     }
 
+    // Temporary plain-text report export. Reads the latest analysis at click time.
+    function downloadTextReport() {
+        const filename = csvFileInput.files[0]?.name || 'dataset';
+        const plainText = value => String(value ?? '')
+            .replace(/^#{1,6}\s+/gm, '')
+            .replace(/\*\*([^*]+)\*\*/g, '$1')
+            .replace(/`([^`]+)`/g, '$1')
+            .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1');
+        const formatValue = value => value !== null && typeof value === 'object'
+            ? JSON.stringify(value) : String(value ?? 'N/A');
+        const formatHypotheses = hypotheses => hypotheses.length
+            ? hypotheses.map((hypothesis, index) => {
+                if (typeof hypothesis === 'string') return `${index + 1}. ${hypothesis}`;
+                const { Hypothesis_Text, ...metrics } = hypothesis;
+                return `${index + 1}. ${Hypothesis_Text || 'Hypothesis without a description'}\n` +
+                    Object.entries(metrics).map(([key, value]) => `   ${key}: ${formatValue(value)}`).join('\n');
+            }).join('\n\n')
+            : 'No hypotheses available.';
+        const analysis = typeof currentAnalysisSections !== 'undefined'
+            ? currentAnalysisSections : {};
+        const ranked = window.hypothesesApp?.sortedHypotheses || [];
+        const report = [
+            'RANKED HYPOTHESES',
+            'Current order by Fitness_Score (descending). The metrics below are those recorded by HELIOS.',
+            formatHypotheses(ranked),
+            '\nNARRATIVE',
+            plainText(analysis.narrator || 'Not generated yet. Use Analyze with AI to generate the narrative.'),
+            '\nNEXT STEPS',
+            plainText(analysis.nextSteps || 'Not generated yet. Use Analyze with AI to generate next steps.')
+        ].join('\n\n');
+        const blob = new Blob([report + '\n'], { type: 'text/plain;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `${filename.replace(/\.[^/.]+$/, '')}_helios_report.txt`;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
+
     function renderDownloadHypothesesButton(parentContainer) {
         if (!parentContainer) return;
 
@@ -138,7 +244,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const wrapper = document.createElement('div');
         wrapper.id = 'download-hypotheses-wrapper';
-        wrapper.className = 'mt-6 pt-4 border-t flex justify-end';
+        wrapper.className = 'mt-6 pt-4 border-t flex flex-wrap gap-3 justify-end';
 
         const button = document.createElement('button');
         button.id = 'download-hypotheses-btn';
@@ -159,6 +265,13 @@ document.addEventListener('DOMContentLoaded', () => {
         });
 
         wrapper.appendChild(button);
+        const textButton = document.createElement('button');
+        textButton.id = 'download-report-txt-btn';
+        textButton.className = button.className;
+        textButton.textContent = 'Download TXT';
+        textButton.disabled = !hasHypotheses;
+        textButton.addEventListener('click', downloadTextReport);
+        wrapper.appendChild(textButton);
         parentContainer.appendChild(wrapper);
     }
 
@@ -270,92 +383,6 @@ document.addEventListener('DOMContentLoaded', () => {
                         <div id="ai-progress-fill" class="h-3 bg-indigo-600 transition-all duration-300" style="width: 0%;"></div>
                     </div>
 
-                    <div id="ai-live-preview-wrapper" class="space-y-4">
-
-                        <div id="ai-data-context-panel" class="hidden rounded-xl border border-sky-200 bg-sky-50 p-4">
-
-                            <div class="flex items-center justify-between mb-2">
-
-                                <h4 class="font-semibold text-sky-900 flex items-center">
-                                    <i class="fas fa-database mr-2"></i>
-                                    Data context sent to the agents
-                                </h4>
-
-                                <span
-                                    id="ai-selected-test-badge"
-                                    class="text-xs font-medium bg-sky-100 text-sky-800 px-2 py-1 rounded-full"
-                                >
-                                    Auto
-                                </span>
-
-                            </div>
-
-                            <details open>
-
-                                <summary class="cursor-pointer text-sm font-medium text-sky-900">
-                                    Show exact data_context
-                                </summary>
-
-                                <pre
-                                    id="ai-data-context"
-                                    class="mt-3 text-xs text-gray-700 whitespace-pre-wrap break-words max-h-96 overflow-y-auto bg-white p-3 rounded-lg border border-sky-200"
-                                >Preparing dataset context...</pre>
-
-                            </details>
-
-                        </div>
-
-                        <div class="rounded-xl border border-emerald-200 bg-emerald-50 p-4">
-                                <div class="flex items-center justify-between mb-2">
-                                    <h4 class="font-semibold text-emerald-900 flex items-center">
-                                        <i class="fas fa-flask mr-2"></i>
-                                        Statistical test advisor
-                                    </h4>
-                                    <span id="ai-advisor-status" class="text-xs font-medium bg-emerald-100 text-emerald-800 px-2 py-1 rounded-full">
-                                        Pending
-                                    </span>
-                                </div>
-                                <div id="ai-advisor-text" class="text-sm text-emerald-900 whitespace-pre-wrap">
-                                    Waiting for test recommendations...
-                                </div>
-                            </div>
-                        <div class="rounded-xl border border-amber-200 bg-amber-50 p-4">
-                            <div class="flex items-center justify-between mb-2">
-                                <h4 class="font-semibold text-amber-900 flex items-center">
-                                    <i class="fas fa-spinner fa-spin mr-2"></i>
-                                    Generating hypotheses...
-                                </h4>
-                                <span id="ai-live-run-badge" class="text-xs font-medium bg-amber-100 text-amber-800 px-2 py-1 rounded-full">
-                                    Run 0 / 0
-                                </span>
-                            </div>
-                            <p class="text-sm text-amber-800">
-                                The model is currently working on generating possible hypotheses.
-                            </p>
-                        </div>
-
-                        <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                            <div class="rounded-xl border border-gray-200 bg-gray-50 p-4">
-                                <div class="flex items-center justify-between mb-2">
-                                    <h4 class="font-semibold text-gray-800">Live raw output</h4>
-                                    <span class="text-xs text-gray-500">Streaming preview</span>
-                                </div>
-                                <pre id="ai-live-raw-output" class="text-xs text-gray-700 whitespace-pre-wrap break-words max-h-80 overflow-y-auto bg-white p-3 rounded-lg border border-gray-200">Waiting for model output...</pre>
-                            </div>
-
-                            <div class="rounded-xl border border-indigo-200 bg-indigo-50 p-4">
-                                <div class="flex items-center justify-between mb-2">
-                                    <h4 class="font-semibold text-indigo-900">Parsed hypotheses preview</h4>
-                                    <span id="ai-live-hyp-count" class="text-xs font-medium bg-indigo-100 text-indigo-800 px-2 py-1 rounded-full">
-                                        0 hypotheses
-                                    </span>
-                                </div>
-                                <div id="ai-live-hypotheses-list" class="space-y-2 max-h-80 overflow-y-auto">
-                                    <p class="text-sm text-gray-500">No parsed hypotheses yet.</p>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
                 </div>
             `;
             resultsArea.prepend(progressWrapper.firstElementChild);
@@ -458,6 +485,18 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function updateLiveHypothesisPreview(progressData = {}) {
+        if (progressData.data_context) {
+            const contextEl = document.getElementById('ai-data-context');
+            const summaryEl = document.getElementById('eda-agent-summary');
+            try {
+                const context = JSON.parse(progressData.data_context);
+                if (contextEl) contextEl.textContent = JSON.stringify(context, null, 2);
+                if (summaryEl) summaryEl.textContent = context.eda_agent?.summary || context.eda_agent?.reason || '';
+                document.getElementById('ai-data-context-panel')?.classList.remove('hidden');
+            } catch (error) {
+                if (contextEl) contextEl.textContent = progressData.data_context;
+            }
+        }
         const rawOutputEl = document.getElementById('ai-live-raw-output');
         const hypListEl = document.getElementById('ai-live-hypotheses-list');
         const hypCountEl = document.getElementById('ai-live-hyp-count');
@@ -537,7 +576,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     async function pollAIProgress(jobId) {
         while (true) {
-            const response = await fetch(`http://localhost:8000/generate_ai_progress/${jobId}`);
+            const response = await fetch(`/generate_ai_progress/${jobId}`);
             const data = await response.json();
 
             updateAIProgressBar(
@@ -570,7 +609,7 @@ document.addEventListener('DOMContentLoaded', () => {
         advisorStatusEl.textContent = 'Analyzing';
 
         try {
-            const response = await fetch('http://localhost:8000/generate_statistical_advice_stream', {
+            const response = await fetch('/generate_statistical_advice_stream', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)
@@ -603,13 +642,8 @@ document.addEventListener('DOMContentLoaded', () => {
         showAIProgressBox();
 
        
-        if (!advisorAlreadyGenerated) {
-            advisorAlreadyGenerated = true;
-            startAdvisorStreaming(payload);
-        }
-
         try {
-            const startResponse = await fetch('http://localhost:8000/generate_ai_async', {
+            const startResponse = await fetch('/generate_ai_async', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)
@@ -626,7 +660,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             updateAIProgressBar(100, 'Finished generating hypotheses. Loading results...');
 
-            const resultResponse = await fetch(`http://localhost:8000/generate_ai_result/${jobId}`);
+            const resultResponse = await fetch(`/generate_ai_result/${jobId}`);
             if (!resultResponse.ok) {
                 throw new Error(`HTTP Error! status: ${resultResponse.status}`);
             }
@@ -774,7 +808,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         tableHTML += `</tbody></table></div></div></div>
 
-            <div id="description-section" class="mt-6 pt-6 border-t collapsible-section">
+            <div id="description-section" hidden class="mt-6 pt-6 border-t collapsible-section">
                 <div class="flex justify-between items-center mb-4 cursor-pointer collapsible-header" data-interactive="true">
                     <h3 class="text-xl font-semibold">Dataset Description (Optional)</h3>
                     <i class="fas ${descriptionState ? 'fa-chevron-up' : 'fa-chevron-down'} text-gray-600 collapse-icon"></i>
@@ -1260,7 +1294,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const requestPromise = hasAIOnly
             ? runAIHypothesisGeneration(payload)
-            : fetch("http://localhost:8000/generate", {
+            : fetch("/generate", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(payload)
@@ -1275,31 +1309,9 @@ document.addEventListener('DOMContentLoaded', () => {
             .then(data => {
                 console.log("Response from backend:", data);
 
-                let persistedAdvisorHTML = '';
-                let persistedDataContextHTML = '';
-                    const existingAdvisorBox = document.getElementById('ai-progress-box');
-
-                    if (existingAdvisorBox) {
-                        const advisorCard = existingAdvisorBox.querySelector('.rounded-xl.border.border-emerald-200');
-                        if (advisorCard) {
-                            persistedAdvisorHTML = advisorCard.outerHTML;
-                        }
-                    }
-
-                    const dataContextCard =
-                        document.getElementById('ai-data-context')?.closest(
-                            '.rounded-xl.border.border-sky-200'
-                        );
-
-                    if (dataContextCard) {
-                        persistedDataContextHTML = dataContextCard.outerHTML;
-                    }
-
                 if (!appendHypotheses || !document.getElementById('tab-table')) {
                     resultsArea.innerHTML = `
-                    ${persistedDataContextHTML}
-                    ${persistedAdvisorHTML}
-                    <nav class="-mb-px flex space-x-8" aria-label="Tabs">
+                    <nav class="-mb-px flex space-x-8 overflow-x-auto" aria-label="Tabs">
                         <button id="tab-table" class="tab-btn whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm text-blue-600 border-blue-600" data-tab="table">
                             <i class="fas fa-table mr-2"></i>Table View
                         </button>
@@ -1318,8 +1330,17 @@ document.addEventListener('DOMContentLoaded', () => {
                         <button id="tab-metrics" class="tab-btn whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm text-gray-500 hover:text-gray-700 hover:border-gray-300 border-transparent" data-tab="metrics">
                             <i class="fas fa-chart-line mr-2"></i>Metrics Analysis
                         </button> 
+                        <button id="tab-context" class="tab-btn whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm text-gray-500 border-transparent" data-tab="context">
+                            <i class="fas fa-database mr-2"></i>Generation Context
+                        </button>
+                        <button id="tab-ranking" class="tab-btn whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm text-gray-500 border-transparent" data-tab="ranking">
+                            <i class="fas fa-clipboard-check mr-2"></i>Ranking
+                        </button>
                     </nav>
+                    <div id="tab-content-context" class="tab-content-panel hidden"></div>
+                    <div id="tab-content-ranking" class="tab-content-panel hidden"></div>
                     <div id="tab-content-table" class="tab-content-panel">
+                        <h3 class="text-xl font-semibold text-gray-900 mt-6 mb-4">Hypothesis with Statistical Evidence</h3>
                         <div id="hypothesis-tables-container"></div>
                     </div>
                     <div id="tab-content-tree" class="tab-content-panel hidden">
@@ -1358,6 +1379,11 @@ document.addEventListener('DOMContentLoaded', () => {
                         });
                     });
                 }
+
+                const contextPanel = document.getElementById('tab-content-context');
+                if (contextPanel) contextPanel.innerHTML = renderGenerationContext(data?.run_params?.data_context);
+                const rankingPanel = document.getElementById('tab-content-ranking');
+                if (rankingPanel) renderRankingReport(rankingPanel, data?.run_params?.ranking);
 
                 if (data && data.final_hypotheses_df) {
                     const targetColumnData = window.HeliosCore.state.tableData.rows
@@ -1407,8 +1433,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
                     currentValidatedHypotheses = data.final_hypotheses_df || [];
 
-                    
-
                     setupAndRenderHypotheses(hypotheses, data.sunburst_json, targetInfoForDisplay, window.HeliosCore.state.tableData);
 
                     const downloadContainer = document.getElementById('hypotheses-download-container');
@@ -1417,9 +1441,9 @@ document.addEventListener('DOMContentLoaded', () => {
                     const validCount = Array.isArray(hypotheses) ? hypotheses.length : 0;
 
                     if (validCount > 0) {
-                        showSuccessToast(`Generation completed: ${validCount} significant hypotheses loaded in Table View.`);
+                        showSuccessToast(`Generation completed: Hypothesis with Statistical Evidence: ${validCount} loaded in Table View.`);
                     } else {
-                        showSuccessToast(`Generation completed: no significant hypotheses were found.`);
+                        showSuccessToast(`Generation completed: no hypotheses with statistical evidence were found.`);
                     }
 
                     if (appendHypotheses) {
@@ -1459,9 +1483,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 resultsArea.innerHTML = `
                 <div class="text-center text-red-500 p-8">
                     <i class="fas fa-exclamation-triangle text-3xl mb-4"></i>
-                    <p class="font-bold">Failed to connect to the backend.</p>
-                    <p class="text-sm">Please ensure the Python server is running at http://localhost:8000 and try again.</p>
+                    <p class="font-bold">Hypothesis generation failed.</p>
+                    <p class="text-sm" id="hypothesis-generation-error"></p>
                 </div>`;
+                const connectionFailed = error instanceof TypeError && /fetch|network/i.test(error.message);
+                document.getElementById('hypothesis-generation-error').textContent = connectionFailed
+                    ? 'Failed to connect to the backend. Please ensure the Python server is running at  and try again.'
+                    : (error.message || 'An unexpected error occurred while generating hypotheses.');
                 updateCollapsibleHeight(resultsArea);
             });
     };
