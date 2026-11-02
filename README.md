@@ -35,7 +35,7 @@ The commands below assume that `main.py`, `requirements.txt`, and `Dockerfile.ed
 Create an independent environment and install dependencies:
 
 ```powershell
-py -3.11 -m venv .venv
+python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
